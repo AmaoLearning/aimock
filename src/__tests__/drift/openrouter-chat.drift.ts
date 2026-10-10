@@ -24,9 +24,14 @@
  *      the REAL handler + shaping + collector routing path, not a unit fake.
  *
  *   3. K9 reasoning exhaustion — OPENROUTER_API_KEY enables ONE PAID streaming
- *      completion: pinned DeepSeek R1/Novita, 16 output tokens requested,
+ *      completion: pinned Qwen3 32B/DeepInfra, 16 output tokens requested,
  *      retries disabled, 45 seconds and 256 KiB maximum. Provider parameter
- *      support does not guarantee budget enforcement. An explicit
+ *      support does not guarantee budget enforcement: the previous pin,
+ *      DeepSeek R1 on its only endpoint (novita/fp8), ignored max_tokens on 8
+ *      of 16 measured calls and streamed reasoning past 1.2 MB without a
+ *      terminal. qwen/qwen3-32b endpoints when re-pinned: deepinfra/fp8 (40/40
+ *      bounded), tenstorrent/fp8, siliconflow/fp8. Fallbacks stay disabled so
+ *      no other endpoint can take this leg over. An explicit
  *      OPENROUTER_K9_CAPTURE plus OPENROUTER_K9_CAPTURE_SHA256 instead replays
  *      an authenticated complete capture; that run is labeled capture replay.
  *
@@ -54,7 +59,7 @@ const OPENROUTER_CHAT_MODEL = "openai/gpt-4o";
 
 const K9_CAPTURE = process.env.OPENROUTER_K9_CAPTURE;
 const K9_REQUEST = {
-  model: "deepseek/deepseek-r1",
+  model: "qwen/qwen3-32b",
   messages: [
     {
       role: "user",
@@ -66,7 +71,7 @@ const K9_REQUEST = {
   reasoning: { enabled: true },
   stream: true,
   stream_options: { include_usage: true },
-  provider: { order: ["novita/fp8"], allow_fallbacks: false, require_parameters: true },
+  provider: { order: ["deepinfra/fp8"], allow_fallbacks: false, require_parameters: true },
 };
 
 // JSON is deliberately inspected independently of SDK stream decoding: [DONE],
