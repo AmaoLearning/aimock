@@ -1509,7 +1509,12 @@ async function runVertexRecurrence(env: VertexEnvironment, origin = VERTEX_ORIGI
           complete: observation.complete,
         };
       } catch {
-        budget.stop();
+        // A complete HTTP 200 the comparator rejected is a per-case finding: record it and keep
+        // measuring the remaining cases so one rejection does not hide them. HTTP, transport and
+        // byte-bound failures (auth, quota, outage) still stop the run before another send.
+        const rejectedOnly =
+          observation !== undefined && observation.status === 200 && observation.complete;
+        if (!rejectedOnly) budget.stop();
         results[index] = {
           ...results[index],
           classification: "FAILURE",
@@ -1523,7 +1528,7 @@ async function runVertexRecurrence(env: VertexEnvironment, origin = VERTEX_ORIGI
             observation?.error ??
             (observation?.status !== 200 ? "HTTP_FAILURE" : "WIRE_OR_SDK_REJECTED"),
         };
-        break;
+        if (!rejectedOnly) break;
       }
     }
   return {
@@ -1841,22 +1846,52 @@ describe.skipIf(!vertexLiveRequested)(
   },
 );
 
+it("Vertex recurrence still stops on a truncated HTTP 200 transport", async () => {
+  await withVertexSequence(
+    async (origin, requests) => {
+      const report = await runVertexRecurrence(localVertexEnvironment, origin);
+      expect(requests).toHaveLength(1);
+      expect(report.results[0]).toMatchObject({
+        classification: "FAILURE",
+        status: 200,
+        complete: false,
+        reason: "TRANSPORT_FAILURE",
+      });
+      expect(report.results.map((result) => result.classification)).toEqual([
+        "FAILURE",
+        "UNATTEMPTED",
+        "UNATTEMPTED",
+        "UNATTEMPTED",
+      ]);
+      expect(report.budget).toEqual({ attempts: 1, tokens: 16, blocked: true });
+    },
+    -1,
+    "cutoff",
+  );
+});
+
 it("Vertex recurring contradiction preserves actual SDK terminal and usage in failure receipt", async () => {
   await withVertexSequence(
     async (origin, requests) => {
       const report = await runVertexRecurrence(localVertexEnvironment, origin);
       console.info(JSON.stringify({ proof: "Vertex recurrence contradiction fields", report }));
-      expect(requests).toHaveLength(1);
+      // A comparator rejection of a complete HTTP 200 no longer hides the later cases.
+      expect(requests).toHaveLength(4);
       expect(report.results[0]).toMatchObject({
         classification: "FAILURE",
         sdk: "DECODED",
         terminal: "MAX_TOKENS",
         usage: { totalTokenCount: 45 },
+        reason: "WIRE_OR_SDK_REJECTED",
       });
       expect(report.results[0].chunks).toHaveLength(1);
-      expect(
-        report.results.slice(1).every((result) => result.classification === "UNATTEMPTED"),
-      ).toBe(true);
+      expect(report.results.map((result) => result.classification)).toEqual([
+        "FAILURE",
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+      ]);
+      expect(report.budget).toEqual({ attempts: 4, tokens: 160, blocked: false });
     },
     -1,
     "contradiction",
