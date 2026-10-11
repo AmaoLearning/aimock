@@ -26,7 +26,10 @@ import {
 } from "./helpers.js";
 import {
   COHERE_BASE_URL,
+  COHERE_K5_NO_GENERATION,
+  COHERE_SHAPE_LEG_NO_GENERATION,
   cohereNoGenerationError,
+  cohereNoGenerationSkipReason,
   isCohereNoGenerationStreamEnd,
   isInfraStatus,
   selectCohereChatModel,
@@ -100,6 +103,19 @@ function cohereChatStreamChunkShape() {
 // ---------------------------------------------------------------------------
 // Real API helpers
 // ---------------------------------------------------------------------------
+
+/** Skip reason for an infra status, citing the response id when the body has one. */
+function cohereInfraSkipReason(status: number, body: string): string {
+  let id: unknown;
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed))
+      id = (parsed as Record<string, unknown>).id;
+  } catch {
+    id = undefined;
+  }
+  return `Cohere /v2/chat returned infra status ${status}${typeof id === "string" ? ` id=${id}` : ""}`;
+}
 
 async function cohereChatNonStreaming(
   model: string,
@@ -295,7 +311,7 @@ describe.skipIf(!HAS_CREDENTIALS)("Cohere drift", () => {
     const resolved = await getCohereChatModel();
     if ("infra" in resolved) {
       // Provider-side auth/credit/rate-limit/5xx — honest skip, not drift.
-      ctx.skip();
+      ctx.skip(`Cohere model listing returned infra status ${resolved.infra}`);
       return;
     }
     if ("unavailable" in resolved) {
@@ -319,13 +335,19 @@ describe.skipIf(!HAS_CREDENTIALS)("Cohere drift", () => {
 
     if (isInfraStatus(realRes.status)) {
       // Real API hit a transient provider-side condition — honest skip.
-      ctx.skip();
+      ctx.skip(cohereInfraSkipReason(realRes.status, realRes.body));
       return;
     }
-    if (cohereNoGenerationError(realRes.status, realRes.body)) {
+    // This request sends no tools, so only NO_VALID_RESPONSE_GENERATED applies.
+    const noGeneration = cohereNoGenerationError(
+      realRes.status,
+      realRes.body,
+      COHERE_SHAPE_LEG_NO_GENERATION,
+    );
+    if (noGeneration) {
       // Upstream generated nothing (exact 422 no-generation envelope). There is
       // no success envelope to compare, so this send is an honest skip.
-      ctx.skip();
+      ctx.skip(cohereNoGenerationSkipReason([noGeneration]));
       return;
     }
 
@@ -350,7 +372,7 @@ describe.skipIf(!HAS_CREDENTIALS)("Cohere drift", () => {
     const resolved = await getCohereChatModel();
     if ("infra" in resolved) {
       // Provider-side auth/credit/rate-limit/5xx — honest skip, not drift.
-      ctx.skip();
+      ctx.skip(`Cohere model listing returned infra status ${resolved.infra}`);
       return;
     }
     if ("unavailable" in resolved) {
@@ -374,13 +396,19 @@ describe.skipIf(!HAS_CREDENTIALS)("Cohere drift", () => {
 
     if (isInfraStatus(realRes.status)) {
       // Real API hit a transient provider-side condition — honest skip.
-      ctx.skip();
+      ctx.skip(cohereInfraSkipReason(realRes.status, realRes.body));
       return;
     }
-    if (cohereNoGenerationError(realRes.status, realRes.body)) {
+    // This request sends no tools, so only NO_VALID_RESPONSE_GENERATED applies.
+    const noGeneration = cohereNoGenerationError(
+      realRes.status,
+      realRes.body,
+      COHERE_SHAPE_LEG_NO_GENERATION,
+    );
+    if (noGeneration) {
       // Upstream generated nothing (exact 422 no-generation envelope). There is
       // no success envelope to compare, so this send is an honest skip.
-      ctx.skip();
+      ctx.skip(cohereNoGenerationSkipReason([noGeneration]));
       return;
     }
 
@@ -759,8 +787,8 @@ function cohereFieldNames(value: unknown): unknown {
 interface CohereK5Options {
   /**
    * Live Cohere leg only: accept the exact upstream no-generation outcomes
-   * (422 NO_TOOL_CALL_OR_RESPONSE_GENERATED object, or a stream whose
-   * message-end is finish_reason ERROR with empty usage) as
+   * (a 422 NO_TOOL_CALL_OR_RESPONSE_GENERATED envelope on either send, or a
+   * stream whose message-end is finish_reason ERROR with empty usage) as
    * UPSTREAM_NO_GENERATION. The aimock and replay legs leave it off and stay strict.
    */
   live?: boolean;
@@ -772,21 +800,21 @@ function readCohereK5(
   expectedTool: string,
   options: CohereK5Options = {},
 ) {
-  if (options.live && !stream && wire.status === 422) {
+  if (options.live && wire.status === 422) {
+    // A 422 is a JSON envelope whichever send (object or stream) it answers.
     assert.equal(wire.complete, true, "incomplete response");
     assert(/^application\/json(?:;|$)/i.test(wire.contentType ?? ""), "wrong content type");
     const text = new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(wire.bytes));
-    assert.equal(
-      cohereNoGenerationError(wire.status, text),
-      "NO_TOOL_CALL_OR_RESPONSE_GENERATED",
-      "HTTP failure",
-    );
+    // The K5 request sends a REQUIRED tool, so only the tool-request code applies.
+    const upstream = cohereNoGenerationError(wire.status, text, COHERE_K5_NO_GENERATION);
+    assert(upstream, "HTTP failure");
     return {
       classification: "UPSTREAM_NO_GENERATION" as const,
       finish: "ERROR",
       calls: [] as ReturnType<typeof cohereCall>[],
       usage: {} as Record<string, unknown>,
       raw: JSON.parse(text) as unknown,
+      upstream,
     };
   }
   assert.equal(wire.status, 200, "HTTP failure");
@@ -935,6 +963,10 @@ function readCohereK5(
         calls,
         usage: {} as Record<string, unknown>,
         raw: events as unknown,
+        upstream: {
+          errorType: "NO_TOOL_CALL_OR_RESPONSE_GENERATED" as const,
+          id: cohereString(events[0].id),
+        },
       };
     }
     finish = cohereString(delta.finish_reason);
@@ -976,6 +1008,7 @@ function readCohereK5(
     calls,
     usage,
     raw,
+    upstream: undefined,
   };
 }
 function compareCohereK5(
@@ -1043,36 +1076,40 @@ async function runCohereK5Modes(baseUrl: string, token: string, options: CohereK
     });
     const events: Cohere.V2ChatStreamResponse[] = [];
     let object: Cohere.V2ChatResponse | undefined;
-    if (!stream) {
-      try {
+    try {
+      if (!stream)
         object = await client.chat(cohereK5Request, {
           maxRetries: 0,
           timeoutInSeconds: 45,
           abortSignal: AbortSignal.timeout(45000),
         });
-      } catch (error) {
-        // Live only: the exact 422 no-generation envelope is an upstream
-        // outcome, not a transport/schema failure. Anything else rethrows.
-        if (!options.live || !(error instanceof CohereError) || error.statusCode !== 422)
-          throw error;
-        assert.equal(wire.length, 1, "unexpected send count");
-        let parsed: ReturnType<typeof readCohereK5>;
-        try {
-          parsed = readCohereK5(wire[0], false, "record_numbers", options);
-        } catch {
-          throw error;
-        }
-        results.push({ stream, ...parsed });
-        continue;
+      else
+        for await (const event of await client.chatStream(cohereK5Request, {
+          maxRetries: 0,
+          timeoutInSeconds: 45,
+          abortSignal: AbortSignal.timeout(45000),
+        }))
+          events.push(event);
+    } catch (error) {
+      // Live only: the exact 422 no-generation envelope is an upstream
+      // outcome, not a transport/schema failure. Anything else rethrows.
+      if (!options.live || !(error instanceof CohereError) || error.statusCode !== 422) throw error;
+      assert.equal(wire.length, 1, "unexpected send count");
+      let parsed: ReturnType<typeof readCohereK5>;
+      try {
+        parsed = readCohereK5(wire[0], stream, "record_numbers", options);
+      } catch (rejection) {
+        // Keep both the SDK error and why the classifier refused the 422.
+        throw new Error(
+          `Cohere K5 ${stream ? "stream" : "object"} 422 is not an accepted no-generation outcome: ${
+            rejection instanceof Error ? rejection.message : String(rejection)
+          }`,
+          { cause: { sdk: error, classifier: rejection } },
+        );
       }
+      results.push({ stream, ...parsed });
+      continue;
     }
-    if (stream)
-      for await (const event of await client.chatStream(cohereK5Request, {
-        maxRetries: 0,
-        timeoutInSeconds: 45,
-        abortSignal: AbortSignal.timeout(45000),
-      }))
-        events.push(event);
     assert.equal(wire.length, 1, "unexpected send count");
     const parsed = compareCohereK5(
       wire[0],
@@ -1087,11 +1124,32 @@ async function runCohereK5Modes(baseUrl: string, token: string, options: CohereK
   return results;
 }
 
+/**
+ * When every K5 send came back UPSTREAM_NO_GENERATION nothing was compared, so
+ * the run is a skip (with the upstream codes and ids), never a pass.
+ */
+function cohereK5SkipReason(results: Awaited<ReturnType<typeof runCohereK5Modes>>) {
+  const outcomes = results.map((result) => result.upstream);
+  if (outcomes.length === 0 || !outcomes.every((outcome) => outcome !== undefined)) return null;
+  return cohereNoGenerationSkipReason(outcomes as NonNullable<(typeof outcomes)[number]>[]);
+}
+
+async function runCohereK5Live(
+  ctx: { skip: (note?: string) => never },
+  baseUrl: string,
+  token: string,
+) {
+  const results = await runCohereK5Modes(baseUrl, token, { live: true });
+  const skip = cohereK5SkipReason(results);
+  if (skip) ctx.skip(skip);
+  return results;
+}
+
 it.skipIf(!HAS_CREDENTIALS)(
   "P1 Cohere native K5 object modeled and stream observed comparison",
-  async () => {
+  async (ctx) => {
     assert(COHERE_API_KEY, "configured Cohere credential missing");
-    const results = await runCohereK5Modes(COHERE_BASE_URL, COHERE_API_KEY, { live: true });
+    const results = await runCohereK5Live(ctx, COHERE_BASE_URL, COHERE_API_KEY);
     console.log(
       JSON.stringify({
         cohereK5: results.map(({ stream, classification, finish, usage }) => ({
@@ -1166,18 +1224,23 @@ async function readCohereNoGenerationCaptures() {
 // sometimes generates nothing — a 422 NO_TOOL_CALL_OR_RESPONSE_GENERATED on the
 // object send, or a 200 stream whose message-end is finish_reason ERROR with
 // usage {}. Served over loopback so the SDK and the wire reader see real bytes.
-async function withCohereNoGenerationServer(
-  bytes: { object: Uint8Array; stream: Uint8Array },
+interface CohereReplay {
+  status: number;
+  contentType: string;
+  body: Uint8Array;
+}
+
+async function withCohereReplayServer(
+  replies: { object: CohereReplay; stream: CohereReplay },
   run: (baseUrl: string) => Promise<void>,
 ) {
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const body = JSON.parse(Buffer.concat(chunks).toString());
-    response.writeHead(body.stream ? 200 : 422, {
-      "content-type": body.stream ? "text/event-stream" : "application/json",
-    });
-    response.end(body.stream ? bytes.stream : bytes.object);
+    const reply = body.stream ? replies.stream : replies.object;
+    response.writeHead(reply.status, { "content-type": reply.contentType });
+    response.end(reply.body);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
@@ -1191,6 +1254,98 @@ async function withCohereNoGenerationServer(
     );
   }
 }
+
+async function withCohereNoGenerationServer(
+  bytes: { object: Uint8Array; stream: Uint8Array },
+  run: (baseUrl: string) => Promise<void>,
+) {
+  await withCohereReplayServer(
+    {
+      object: { status: 422, contentType: "application/json", body: bytes.object },
+      stream: { status: 200, contentType: "text/event-stream", body: bytes.stream },
+    },
+    run,
+  );
+}
+
+class CohereTestSkip extends Error {}
+const recordingSkipContext = {
+  skip: (note?: string): never => {
+    throw new CohereTestSkip(note);
+  },
+};
+
+it("P1 Cohere K5 live run is a skip, not a pass, when every send generated nothing", async () => {
+  const bytes = await readCohereNoGenerationCaptures();
+  const objectId = JSON.parse(bytes.object.toString()).id as string;
+  const streamId = JSON.parse(bytes.stream.toString().split("\n")[1].slice(6)).id as string;
+  await withCohereNoGenerationServer(bytes, async (baseUrl) => {
+    const skipped = await runCohereK5Live(recordingSkipContext, baseUrl, "local").then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(skipped).toBeInstanceOf(CohereTestSkip);
+    const reason = (skipped as Error).message;
+    expect(reason).toContain(`NO_TOOL_CALL_OR_RESPONSE_GENERATED id=${objectId}`);
+    expect(reason).toContain(`NO_TOOL_CALL_OR_RESPONSE_GENERATED id=${streamId}`);
+  });
+  // One compared send is enough to make the run a real pass.
+  const object = await readFile(new URL("./fixtures/cohere-k5-object.raw", import.meta.url));
+  await withCohereReplayServer(
+    {
+      object: { status: 200, contentType: "application/json", body: object },
+      stream: { status: 200, contentType: "text/event-stream", body: bytes.stream },
+    },
+    async (baseUrl) => {
+      const results = await runCohereK5Live(recordingSkipContext, baseUrl, "local");
+      expect(results.map((result) => result.classification)).toEqual([
+        "NOT_TRIGGERED",
+        "UPSTREAM_NO_GENERATION",
+      ]);
+    },
+  );
+});
+
+it("P1 Cohere K5 live leg accepts a 422 no-generation reply on the stream send", async () => {
+  // CONSTRUCTED: a 422 on the K5 *stream* send has not been observed live
+  // (it was observed on the K5 object send and on the shape leg's stream send).
+  // The body is the genuine K5 object capture, so only the routing is synthetic.
+  const bytes = await readCohereNoGenerationCaptures();
+  const object = await readFile(new URL("./fixtures/cohere-k5-object.raw", import.meta.url));
+  const replies = (body: Uint8Array) => ({
+    object: { status: 200, contentType: "application/json", body: object },
+    stream: { status: 422, contentType: "application/json", body },
+  });
+  await withCohereReplayServer(replies(bytes.object), async (baseUrl) => {
+    const results = await runCohereK5Modes(baseUrl, "local", { live: true });
+    expect(results.map((result) => [result.stream, result.classification])).toEqual([
+      [false, "NOT_TRIGGERED"],
+      [true, "UPSTREAM_NO_GENERATION"],
+    ]);
+    await expect(runCohereK5Modes(baseUrl, "local")).rejects.toThrow();
+  });
+  // A no-tools code on the tool request is refused, and the refusal keeps the
+  // classifier's reason as well as the SDK error.
+  const wrongCode = Buffer.from(
+    JSON.stringify({
+      ...JSON.parse(bytes.object.toString()),
+      error_type: "NO_VALID_RESPONSE_GENERATED",
+    }),
+  );
+  await withCohereReplayServer(replies(wrongCode), async (baseUrl) => {
+    const refused = await runCohereK5Modes(baseUrl, "local", { live: true }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(Error);
+    expect((refused as Error).message).toContain(
+      "Cohere K5 stream 422 is not an accepted no-generation outcome: HTTP failure",
+    );
+    const cause = (refused as Error).cause as { sdk: unknown; classifier: unknown };
+    expect(cause.sdk).toBeInstanceOf(CohereError);
+    expect(cause.classifier).toBeInstanceOf(Error);
+  });
+});
 
 it("P1 Cohere K5 live leg accepts genuine upstream no-generation captures", async () => {
   const bytes = await readCohereNoGenerationCaptures();
@@ -1237,6 +1392,10 @@ it("P1 Cohere K5 live leg rejects mutated no-generation shapes", async () => {
   const toolStart =
     'event: tool-call-start\ndata: {"type":"tool-call-start","index":0,"delta":{"message":{"tool_calls":{"id":"record_numbers_x","type":"function","function":{"name":"record_numbers","arguments":""}}}}}\n\n' +
     'event: tool-call-end\ndata: {"type":"tool-call-end","index":0}\n\n';
+  const contentBlock =
+    'event: content-start\ndata: {"type":"content-start","index":0,"delta":{"message":{"content":{"type":"text","text":""}}}}\n\n' +
+    'event: content-delta\ndata: {"type":"content-delta","index":0,"delta":{"message":{"content":{"text":"hi"}}}}\n\n' +
+    'event: content-end\ndata: {"type":"content-end","index":0}\n\n';
   const streamMutants: [string, string][] = [
     ["non-empty usage", stream.replace('"usage":{}', '"usage":{"tokens":{}}')],
     [
@@ -1252,6 +1411,10 @@ it("P1 Cohere K5 live leg rejects mutated no-generation shapes", async () => {
     [
       "tool before terminal",
       stream.replace("event: message-end", toolStart + "event: message-end"),
+    ],
+    [
+      "content before terminal",
+      stream.replace("event: message-end", contentBlock + "event: message-end"),
     ],
   ];
   for (const [name, mutant] of streamMutants) {
@@ -1282,6 +1445,32 @@ it("P1 Cohere K5 live leg rejects mutated no-generation shapes", async () => {
   expect(
     readCohereK5(observation(bytes.stream, true, 200), true, "record_numbers", live).classification,
   ).toBe("UPSTREAM_NO_GENERATION");
+  // Each guard is pinned by the specific failure it raises.
+  expect(() =>
+    readCohereK5(
+      observation(
+        stream.replace("event: message-end", contentBlock + "event: message-end"),
+        true,
+        200,
+      ),
+      true,
+      "record_numbers",
+      live,
+    ),
+  ).toThrow("content before no-generation terminal");
+  const genuine422 = observation(bytes.object, false, 422);
+  expect(readCohereK5(genuine422, false, "record_numbers", live).classification).toBe(
+    "UPSTREAM_NO_GENERATION",
+  );
+  expect(() =>
+    readCohereK5({ ...genuine422, complete: false }, false, "record_numbers", live),
+  ).toThrow("incomplete response");
+  expect(() =>
+    readCohereK5({ ...genuine422, contentType: "text/plain" }, false, "record_numbers", live),
+  ).toThrow("wrong content type");
+  expect(() =>
+    readCohereK5({ ...genuine422, contentType: "text/event-stream" }, true, "record_numbers", live),
+  ).toThrow("wrong content type");
 });
 
 it("P1 Cohere K5 native coordinator fails fast on actual HTTP authentication error", async () => {

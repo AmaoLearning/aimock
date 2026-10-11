@@ -10,7 +10,10 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import {
+  COHERE_K5_NO_GENERATION,
+  COHERE_SHAPE_LEG_NO_GENERATION,
   cohereNoGenerationError,
+  cohereNoGenerationSkipReason,
   isCohereNoGenerationStreamEnd,
   isInfraStatus,
   selectCohereChatModel,
@@ -74,31 +77,60 @@ describe("cohereNoGenerationError", () => {
     "utf8",
   );
   const body = JSON.parse(captured) as Record<string, unknown>;
+  const shape = COHERE_SHAPE_LEG_NO_GENERATION;
+  const tool = COHERE_K5_NO_GENERATION;
+  const toolBody = JSON.stringify({ ...body, error_type: "NO_TOOL_CALL_OR_RESPONSE_GENERATED" });
 
-  it("recognizes the genuine captured 422 no-generation envelope", () => {
-    expect(cohereNoGenerationError(422, captured)).toBe("NO_VALID_RESPONSE_GENERATED");
-    expect(
-      cohereNoGenerationError(
-        422,
-        JSON.stringify({ ...body, error_type: "NO_TOOL_CALL_OR_RESPONSE_GENERATED" }),
-      ),
-    ).toBe("NO_TOOL_CALL_OR_RESPONSE_GENERATED");
+  it("recognizes the genuine captured 422 envelope and returns its code and id", () => {
+    expect(cohereNoGenerationError(422, captured, shape)).toEqual({
+      errorType: "NO_VALID_RESPONSE_GENERATED",
+      id: body.id,
+    });
+    expect(cohereNoGenerationError(422, toolBody, tool)).toEqual({
+      errorType: "NO_TOOL_CALL_OR_RESPONSE_GENERATED",
+      id: body.id,
+    });
+  });
+
+  it("accepts only the codes the caller allows", () => {
+    // A no-tools shape request must not accept the tool-call code, and vice versa.
+    expect(cohereNoGenerationError(422, toolBody, shape)).toBeNull();
+    expect(cohereNoGenerationError(422, captured, tool)).toBeNull();
   });
 
   it("rejects every other status, shape or error type", () => {
-    expect(cohereNoGenerationError(200, captured)).toBeNull();
-    expect(cohereNoGenerationError(400, captured)).toBeNull();
-    expect(cohereNoGenerationError(422, "not json")).toBeNull();
-    expect(cohereNoGenerationError(422, "[]")).toBeNull();
-    expect(
-      cohereNoGenerationError(422, JSON.stringify({ ...body, error_type: "OTHER" })),
-    ).toBeNull();
-    expect(cohereNoGenerationError(422, JSON.stringify({ ...body, id: "" }))).toBeNull();
-    expect(cohereNoGenerationError(422, JSON.stringify({ ...body, message: "" }))).toBeNull();
-    expect(cohereNoGenerationError(422, JSON.stringify({ ...body, extra: 1 }))).toBeNull();
+    const both = [...shape, ...tool];
+    expect(cohereNoGenerationError(200, captured, both)).toBeNull();
+    expect(cohereNoGenerationError(400, captured, both)).toBeNull();
+    expect(cohereNoGenerationError(422, "not json", both)).toBeNull();
+    expect(cohereNoGenerationError(422, "null", both)).toBeNull();
+    expect(cohereNoGenerationError(422, "[]", both)).toBeNull();
+    for (const mutant of [
+      { ...body, error_type: "OTHER" },
+      { ...body, id: "" },
+      { ...body, id: 123 },
+      { ...body, message: "" },
+      { ...body, message: 123 },
+      { ...body, extra: 1 },
+    ])
+      expect(
+        cohereNoGenerationError(422, JSON.stringify(mutant), both),
+        JSON.stringify(mutant),
+      ).toBeNull();
     const missing = { ...body };
     delete missing.id;
-    expect(cohereNoGenerationError(422, JSON.stringify(missing))).toBeNull();
+    expect(cohereNoGenerationError(422, JSON.stringify(missing), both)).toBeNull();
+  });
+});
+
+describe("cohereNoGenerationSkipReason", () => {
+  it("cites every upstream code and id", () => {
+    const reason = cohereNoGenerationSkipReason([
+      { errorType: "NO_TOOL_CALL_OR_RESPONSE_GENERATED", id: "a1" },
+      { errorType: "NO_VALID_RESPONSE_GENERATED", id: "b2" },
+    ]);
+    expect(reason).toContain("NO_TOOL_CALL_OR_RESPONSE_GENERATED id=a1");
+    expect(reason).toContain("NO_VALID_RESPONSE_GENERATED id=b2");
   });
 });
 
@@ -121,6 +153,7 @@ describe("isCohereNoGenerationStreamEnd", () => {
       { ...end, usage: [] },
       { ...end, usage: null },
       { ...end, error: "" },
+      { ...end, error: 5 },
       { ...end, error_type: "NO_VALID_RESPONSE_GENERATED" },
       { ...end, extra: 1 },
       { finish_reason: "ERROR", usage: {}, error_type: end.error_type },

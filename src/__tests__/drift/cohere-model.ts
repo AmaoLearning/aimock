@@ -70,13 +70,28 @@ function isNoGenerationErrorType(value: unknown): value is CohereNoGenerationErr
   return (COHERE_NO_GENERATION_ERROR_TYPES as readonly unknown[]).includes(value);
 }
 
+/** Codes the no-tools `Say hello` shape legs can receive. */
+export const COHERE_SHAPE_LEG_NO_GENERATION = ["NO_VALID_RESPONSE_GENERATED"] as const;
+/** Codes the K5 `tool_choice: REQUIRED` request can receive. */
+export const COHERE_K5_NO_GENERATION = ["NO_TOOL_CALL_OR_RESPONSE_GENERATED"] as const;
+
+/** An exact upstream no-generation 422 envelope, with the fields a skip reason cites. */
+export interface CohereNoGeneration {
+  errorType: CohereNoGenerationErrorType;
+  id: string;
+}
+
 /**
  * Classify a live Cohere response as the exact upstream no-generation 422
- * envelope. Returns the error type only for status 422 with a JSON body whose
- * keys are exactly `error_type`, `id` and `message` (both strings non-empty)
- * and whose `error_type` is one of COHERE_NO_GENERATION_ERROR_TYPES. Anything
- * else — another status, an extra or missing key, another error type, a
- * non-JSON body — returns null, so the caller keeps failing on it.
+ * envelope. Returns `{ errorType, id }` only for status 422 with a JSON object
+ * body whose keys are exactly `error_type`, `id` and `message` (both strings
+ * non-empty) and whose `error_type` is in `allowed`. Anything else — another
+ * status, an extra or missing key, a non-string field, another error type, a
+ * non-JSON or `null` body — returns null, so the caller keeps failing on it.
+ *
+ * `allowed` must name only the codes the request can produce: a request with
+ * no tools passes `["NO_VALID_RESPONSE_GENERATED"]`; a tool request passes
+ * `["NO_TOOL_CALL_OR_RESPONSE_GENERATED"]`.
  *
  * This is upstream model nondeterminism, not envelope drift: the same request
  * succeeds on the next send. Only the live leg may use it; the aimock leg
@@ -85,7 +100,8 @@ function isNoGenerationErrorType(value: unknown): value is CohereNoGenerationErr
 export function cohereNoGenerationError(
   status: number,
   body: string,
-): CohereNoGenerationErrorType | null {
+  allowed: readonly CohereNoGenerationErrorType[],
+): CohereNoGeneration | null {
   if (status !== 422) return null;
   let parsed: unknown;
   try {
@@ -99,7 +115,16 @@ export function cohereNoGenerationError(
   if (keys.join(",") !== "error_type,id,message") return null;
   if (typeof record.id !== "string" || record.id.length === 0) return null;
   if (typeof record.message !== "string" || record.message.length === 0) return null;
-  return isNoGenerationErrorType(record.error_type) ? record.error_type : null;
+  if (!isNoGenerationErrorType(record.error_type)) return null;
+  if (!allowed.includes(record.error_type)) return null;
+  return { errorType: record.error_type, id: record.id };
+}
+
+/** Skip reason that cites the upstream code and response id. */
+export function cohereNoGenerationSkipReason(outcomes: CohereNoGeneration[]): string {
+  return `Cohere upstream generated nothing (${outcomes
+    .map(({ errorType, id }) => `${errorType} id=${id}`)
+    .join("; ")}); no success envelope to compare`;
 }
 
 /**
