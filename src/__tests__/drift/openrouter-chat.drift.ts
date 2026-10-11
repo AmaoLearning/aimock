@@ -76,7 +76,9 @@ const K9_REQUEST = {
 
 // JSON is deliberately inspected independently of SDK stream decoding: [DONE],
 // every choice, and the usage event must all survive on the actual wire.
-function inspectK9Stream(raw: string) {
+// enforceBudget applies only to provider streams. The localhost usage
+// estimate ignores max_tokens (src/helpers.ts:1538), tracked separately.
+function inspectK9Stream(raw: string, { enforceBudget = false }: { enforceBudget?: boolean } = {}) {
   const blocks = raw.replace(/\r\n/g, "\n").split("\n\n");
   // EOF does not dispatch pending SSE data. Only comments may remain after
   // the last blank-line separator, including after the DONE event.
@@ -142,6 +144,10 @@ function inspectK9Stream(raw: string) {
         expect(Number.isInteger(count)).toBe(true);
         expect(count).toBeGreaterThanOrEqual(0);
       }
+      if (enforceBudget)
+        expect(chunk.usage.completion_tokens, "Provider ignored max_tokens").toBeLessThanOrEqual(
+          K9_REQUEST.max_tokens,
+        );
       hasUsage = true;
     }
   }
@@ -268,6 +274,13 @@ describe("OpenRouter K9 reasoning exhaustion", () => {
       .filter((block) => !block.includes('"usage":'))
       .join("\n\n");
     expect(() => inspectK9Stream(withoutUsage)).toThrow();
+    // A provider that ignores max_tokens can still end with "length".
+    const overBudget = raw.replace(
+      /"completion_tokens":\d+/,
+      `"completion_tokens":${K9_REQUEST.max_tokens + 1}`,
+    );
+    expect(overBudget).not.toBe(raw);
+    expect(() => inspectK9Stream(overBudget, { enforceBudget: true })).toThrow();
     const payload = raw.split("\n\n").find((block) => block.includes('"reasoning_details":'));
     expect(payload).toBeDefined();
     expect(() =>
@@ -284,7 +297,7 @@ describe("OpenRouter K9 reasoning exhaustion", () => {
       : "paid live provider agrees with actual localhost K9",
     async () => {
       const raw = await realK9Stream();
-      const reasoning = inspectK9Stream(raw);
+      const reasoning = inspectK9Stream(raw, { enforceBudget: true });
       const local = await localK9Stream(reasoning);
       console.log(JSON.stringify({ k9: "local compared with provider", raw: local }));
       expect(inspectK9Stream(local)).toBe(reasoning);
