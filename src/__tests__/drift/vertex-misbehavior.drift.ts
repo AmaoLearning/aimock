@@ -27,7 +27,8 @@ interface RetainedCase {
 const MODEL = "gemini-2.5-flash";
 const INTERPRETER_CODE = "print(default_api.archive(cities=['Tokyo";
 // Exact first-city variants of the native interpreter anomaly. Measured live 2026-10-11 over 120
-// k5 runs: 59 Tokyo, 3 London. Unobserved cities stay contradictions.
+// k5 runs: 59 Tokyo, 3 London. The K5 prompt names no cities ("200 distinct full city names"), so
+// there is no request-derived set; the list is observation-only and unobserved cities still fail.
 const INTERPRETER_CODES = [INTERPRETER_CODE, "print(default_api.archive(cities=['London"];
 const MAX_BODY_BYTES = 256 * 1024;
 
@@ -215,14 +216,25 @@ function compareVertexObservation(
   let reason: string;
   if (cell.id.startsWith("k5")) {
     const call = parts.length > 0 ? parts[0].functionCall : undefined;
-    // Object mode: the call is the only part. Stream mode splits it across two chunks: the call,
-    // then a MAX_TOKENS terminal carrying exactly one empty, non-thought text part (32/60 live
-    // k5-stream runs, 2026-10-11). Any other extra part stays a contradiction.
+    // Object mode: the call is the only part. Stream mode splits it across two chunks: chunk 1
+    // carries only the call, chunk 2 is the MAX_TOKENS terminal carrying exactly one empty,
+    // non-thought text part (32/60 live k5-stream runs, 2026-10-11). Any other placement or extra
+    // part stays a contradiction.
+    const chunkParts = chunks.map((chunk) => {
+      const first =
+        isObject(chunk) && Array.isArray(chunk.candidates) ? chunk.candidates[0] : undefined;
+      return isObject(first) && isObject(first.content) && Array.isArray(first.content.parts)
+        ? first.content.parts
+        : [];
+    });
     const anomalyParts = cell.stream
       ? chunks.length === 2 &&
-        parts.length === 2 &&
-        Object.keys(parts[1]).length === 1 &&
-        parts[1].text === ""
+        // parts[0] (checked below as the interpreter call) is then chunk 1's only part.
+        chunkParts[0].length === 1 &&
+        chunkParts[1].length === 1 &&
+        isObject(chunkParts[1][0]) &&
+        Object.keys(chunkParts[1][0]).length === 1 &&
+        chunkParts[1][0].text === ""
       : parts.length === 1;
     const anomaly =
       origin === "native" &&
@@ -623,6 +635,30 @@ describe("Vertex native interpreter anomaly in stream mode and its first-city va
         candidate(chunks[0]).finishReason = "MAX_TOKENS";
         chunks[0].usageMetadata = chunks[1].usageMetadata;
         chunks.splice(1);
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "an empty first chunk and the call plus text in the terminal",
+      edit: (chunks) => {
+        const call = contentParts(chunks[0]).splice(0);
+        contentParts(chunks[1]).unshift(...call);
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "the call and text in the first chunk and an empty terminal",
+      edit: (chunks) => {
+        contentParts(chunks[0]).push(...contentParts(chunks[1]).splice(0));
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "the call in the terminal and the text in the first chunk",
+      edit: (chunks) => {
+        const call = contentParts(chunks[0]).splice(0);
+        contentParts(chunks[0]).push(...contentParts(chunks[1]).splice(0));
+        contentParts(chunks[1]).push(...call);
       },
       error: /contradictory-target/,
     },
