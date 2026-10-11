@@ -24,9 +24,14 @@
  *      the REAL handler + shaping + collector routing path, not a unit fake.
  *
  *   3. K9 reasoning exhaustion — OPENROUTER_API_KEY enables ONE PAID streaming
- *      completion: pinned DeepSeek R1/Novita, 16 output tokens requested,
+ *      completion: pinned Qwen3 32B/DeepInfra, 16 output tokens requested,
  *      retries disabled, 45 seconds and 256 KiB maximum. Provider parameter
- *      support does not guarantee budget enforcement. An explicit
+ *      support does not guarantee budget enforcement: the previous pin,
+ *      DeepSeek R1 on its only endpoint (novita/fp8), ignored max_tokens on 8
+ *      of 16 measured calls and streamed reasoning past 1.2 MB without a
+ *      terminal. qwen/qwen3-32b endpoints when re-pinned: deepinfra/fp8 (40/40
+ *      bounded), tenstorrent/fp8, siliconflow/fp8. Fallbacks stay disabled so
+ *      no other endpoint can take this leg over. An explicit
  *      OPENROUTER_K9_CAPTURE plus OPENROUTER_K9_CAPTURE_SHA256 instead replays
  *      an authenticated complete capture; that run is labeled capture replay.
  *
@@ -54,7 +59,7 @@ const OPENROUTER_CHAT_MODEL = "openai/gpt-4o";
 
 const K9_CAPTURE = process.env.OPENROUTER_K9_CAPTURE;
 const K9_REQUEST = {
-  model: "deepseek/deepseek-r1",
+  model: "qwen/qwen3-32b",
   messages: [
     {
       role: "user",
@@ -66,12 +71,14 @@ const K9_REQUEST = {
   reasoning: { enabled: true },
   stream: true,
   stream_options: { include_usage: true },
-  provider: { order: ["novita/fp8"], allow_fallbacks: false, require_parameters: true },
+  provider: { order: ["deepinfra/fp8"], allow_fallbacks: false, require_parameters: true },
 };
 
 // JSON is deliberately inspected independently of SDK stream decoding: [DONE],
 // every choice, and the usage event must all survive on the actual wire.
-function inspectK9Stream(raw: string) {
+// enforceBudget applies only to provider streams. The localhost usage
+// estimate ignores max_tokens (src/helpers.ts:1538), tracked separately.
+function inspectK9Stream(raw: string, { enforceBudget = false }: { enforceBudget?: boolean } = {}) {
   const blocks = raw.replace(/\r\n/g, "\n").split("\n\n");
   // EOF does not dispatch pending SSE data. Only comments may remain after
   // the last blank-line separator, including after the DONE event.
@@ -137,6 +144,10 @@ function inspectK9Stream(raw: string) {
         expect(Number.isInteger(count)).toBe(true);
         expect(count).toBeGreaterThanOrEqual(0);
       }
+      if (enforceBudget)
+        expect(chunk.usage.completion_tokens, "Provider ignored max_tokens").toBeLessThanOrEqual(
+          K9_REQUEST.max_tokens,
+        );
       hasUsage = true;
     }
   }
@@ -263,6 +274,13 @@ describe("OpenRouter K9 reasoning exhaustion", () => {
       .filter((block) => !block.includes('"usage":'))
       .join("\n\n");
     expect(() => inspectK9Stream(withoutUsage)).toThrow();
+    // A provider that ignores max_tokens can still end with "length".
+    const overBudget = raw.replace(
+      /"completion_tokens":\d+/,
+      `"completion_tokens":${K9_REQUEST.max_tokens + 1}`,
+    );
+    expect(overBudget).not.toBe(raw);
+    expect(() => inspectK9Stream(overBudget, { enforceBudget: true })).toThrow();
     const payload = raw.split("\n\n").find((block) => block.includes('"reasoning_details":'));
     expect(payload).toBeDefined();
     expect(() =>
@@ -279,7 +297,7 @@ describe("OpenRouter K9 reasoning exhaustion", () => {
       : "paid live provider agrees with actual localhost K9",
     async () => {
       const raw = await realK9Stream();
-      const reasoning = inspectK9Stream(raw);
+      const reasoning = inspectK9Stream(raw, { enforceBudget: true });
       const local = await localK9Stream(reasoning);
       console.log(JSON.stringify({ k9: "local compared with provider", raw: local }));
       expect(inspectK9Stream(local)).toBe(reasoning);
