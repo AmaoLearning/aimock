@@ -32,7 +32,6 @@ import {
   OPENAI_K9_SUMMARY_SHAPES,
   matchOpenAIK9SummaryShape,
   isOpenAIModelSnapshot,
-  type OpenAIK9SummaryShape,
 } from "./helpers.js";
 import { connectWebSocket } from "../ws-test-client.js";
 
@@ -358,9 +357,16 @@ function inspectWSExhaustion(
   // Live K9 streams one of three named summary shapes at random (see
   // OPENAI_K9_SUMMARY_SHAPES for the measured frequencies). Only the native
   // side may vary; localhost must still emit the full summary.
-  const summaryShape: OpenAIK9SummaryShape =
-    (kind === "K9" && side === "native" && matchOpenAIK9SummaryShape(order.slice(3, -2))) ||
-    "full-summary";
+  const summaryShape =
+    kind === "K9" && side === "native"
+      ? matchOpenAIK9SummaryShape(order.slice(3, -2))
+      : ("full-summary" as const);
+  if (summaryShape === undefined) {
+    throw new Error(
+      `live K9 event order matches none of the accepted summary shapes ` +
+        `(${Object.keys(OPENAI_K9_SUMMARY_SHAPES).join(", ")}): ${order.join(", ")}`,
+    );
+  }
   expect(order).toEqual([
     "response.created",
     "response.in_progress",
@@ -597,6 +603,13 @@ describe("Responses WS K9 native variant replay", () => {
           event.response.model = "gpt-4.1-mini-2025-04-14";
       }
       expect(() => inspectWSExhaustion(otherModel, "K9", "native")).toThrow();
+      // A valid-looking snapshot on the terminal alone must still disagree
+      // with created/in_progress.
+      const terminalModel = structuredClone(events);
+      const modelTerminal = terminalModel.at(-1);
+      if (modelTerminal?.type !== "response.incomplete") throw new Error("Missing terminal");
+      modelTerminal.response.model = "o4-mini-2099-01-01";
+      expect(() => inspectWSExhaustion(terminalModel, "K9", "native")).toThrow();
     },
   );
 
@@ -616,7 +629,9 @@ describe("Responses WS K9 native variant replay", () => {
       );
     expect(textDone).toHaveLength(1);
     expect(events.length - reordered.length).toBe(1);
-    expect(() => inspectWSExhaustion(reordered, "K9", "native")).toThrow(/deeply equal/);
+    expect(() => inspectWSExhaustion(reordered, "K9", "native")).toThrow(
+      /matches none of the accepted summary shapes/,
+    );
   });
 
   it.each(["no-summary", "unclosed-summary"] as const)(

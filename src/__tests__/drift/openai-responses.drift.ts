@@ -50,7 +50,6 @@ import {
   OPENAI_K9_SUMMARY_SHAPES,
   matchOpenAIK9SummaryShape,
   isOpenAIModelSnapshot,
-  type OpenAIK9SummaryShape,
 } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -158,9 +157,16 @@ function inspectExhaustion(raw: string, kind: "K5" | "K9", side: "provider" | "l
   // Live K9 streams one of three named summary shapes at random (see
   // OPENAI_K9_SUMMARY_SHAPES for the measured frequencies). Only the provider
   // side may vary; localhost must still emit the full summary.
-  const summaryShape: OpenAIK9SummaryShape =
-    (kind === "K9" && side === "provider" && matchOpenAIK9SummaryShape(order.slice(3, -2))) ||
-    "full-summary";
+  const summaryShape =
+    kind === "K9" && side === "provider"
+      ? matchOpenAIK9SummaryShape(order.slice(3, -2))
+      : ("full-summary" as const);
+  if (summaryShape === undefined) {
+    throw new Error(
+      `live K9 event order matches none of the accepted summary shapes ` +
+        `(${Object.keys(OPENAI_K9_SUMMARY_SHAPES).join(", ")}): ${order.join(", ")}`,
+    );
+  }
   expect(order).toEqual([
     "response.created",
     "response.in_progress",
@@ -386,6 +392,24 @@ function readK9ProviderReplay(shape: (typeof K9_PROVIDER_REPLAYS)[number]) {
   return readFile(new URL(`./fixtures/openai-responses-k9-${shape}.sse`, import.meta.url), "utf8");
 }
 
+/** Rewrites only the terminal SSE event's JSON payload. */
+function withTerminalEvent(
+  raw: string,
+  mutate: (terminal: { response: { model: string; usage: { output_tokens: number } } }) => void,
+): string {
+  const blocks = raw.split("\n\n");
+  const index = blocks
+    .map((block) => block.startsWith("event: response.incomplete\n"))
+    .lastIndexOf(true);
+  const lines = blocks[index].split("\n");
+  const dataIndex = lines.findIndex((line) => line.startsWith("data: "));
+  const terminal = JSON.parse(lines[dataIndex].slice(6));
+  mutate(terminal);
+  lines[dataIndex] = `data: ${JSON.stringify(terminal)}`;
+  blocks[index] = lines.join("\n");
+  return blocks.join("\n\n");
+}
+
 describe("Responses K9 provider variant replay", () => {
   it.each(K9_PROVIDER_REPLAYS)(
     "retained %s provider stream agrees with actual localhost",
@@ -399,7 +423,6 @@ describe("Responses K9 provider variant replay", () => {
     async (shape) => {
       const raw = await readK9ProviderReplay(shape);
       expect(raw).toContain('"status":"incomplete"');
-      expect(raw).toContain('"output_tokens":0');
       expect(() =>
         inspectExhaustion(
           raw.replaceAll('"status":"incomplete"', '"status":"completed"'),
@@ -407,13 +430,16 @@ describe("Responses K9 provider variant replay", () => {
           "provider",
         ),
       ).toThrow();
-      expect(() =>
-        inspectExhaustion(
-          raw.replaceAll('"output_tokens":0', '"output_tokens":7'),
-          "K9",
-          "provider",
-        ),
-      ).toThrow();
+      // Only the terminal usage changes; created/in_progress keep their
+      // zero-valued tool_usage, so this isolates the terminal usage check.
+      const spentTokens = withTerminalEvent(raw, (terminal) => {
+        expect(terminal.response.usage.output_tokens).toBe(0);
+        terminal.response.usage.output_tokens = 5;
+      });
+      expect(spentTokens.slice(0, spentTokens.indexOf("event: response.incomplete"))).toBe(
+        raw.slice(0, raw.indexOf("event: response.incomplete")),
+      );
+      expect(() => inspectExhaustion(spentTokens, "K9", "provider")).toThrow();
       expect(raw).toContain('"model":"o4-mini-2025-04-16"');
       expect(() =>
         inspectExhaustion(
@@ -422,6 +448,12 @@ describe("Responses K9 provider variant replay", () => {
           "provider",
         ),
       ).toThrow();
+      // A valid-looking snapshot on the terminal alone must still disagree
+      // with created/in_progress.
+      const terminalModel = withTerminalEvent(raw, (terminal) => {
+        terminal.response.model = "o4-mini-2099-01-01";
+      });
+      expect(() => inspectExhaustion(terminalModel, "K9", "provider")).toThrow();
     },
   );
 
@@ -441,7 +473,7 @@ describe("Responses K9 provider variant replay", () => {
     expect(textDone).toHaveLength(1);
     expect(blocks.length - reordered.length).toBe(1);
     expect(() => inspectExhaustion(reordered.join("\n\n"), "K9", "provider")).toThrow(
-      /deeply equal/,
+      /matches none of the accepted summary shapes/,
     );
   });
 
