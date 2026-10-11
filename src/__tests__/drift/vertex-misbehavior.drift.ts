@@ -27,6 +27,10 @@ interface RetainedCase {
 const MODEL = "gemini-2.5-flash";
 const INTERPRETER_PREFIX = "print(default_api.archive(cities=['";
 const INTERPRETER_CODE = `${INTERPRETER_PREFIX}Tokyo`;
+// The prefix, then one unfinished city: no quote, backslash or newline, and not blank. All 63
+// interpreter anomalies in 161 live captures (2026-10-11) had this shape: one truncated city.
+const INTERPRETER_CODE_PATTERN =
+  /^print\(default_api\.archive\(cities=\['[^'\\\n\r]*[^'\\\s][^'\\\n\r]*$/;
 const MAX_BODY_BYTES = 256 * 1024;
 
 function isObject(value: Json | undefined): value is JsonObject {
@@ -245,9 +249,9 @@ function compareVertexObservation(
       typeof call.args.code === "string" &&
       // Any first city: the K5 prompt asks for 200 city names without naming one (live: 59 Tokyo,
       // 3 London in 120 runs), so an observed-only list would raise false drift alerts. Still
-      // enforced: the interpreter call, the archive prefix, a non-empty name, native leg only.
-      call.args.code.startsWith(INTERPRETER_PREFIX) &&
-      call.args.code.length > INTERPRETER_PREFIX.length;
+      // enforced: the interpreter call, the archive prefix, one unfinished non-blank city, native
+      // leg only.
+      INTERPRETER_CODE_PATTERN.test(call.args.code);
     if (anomaly) {
       classification = "NOT_TRIGGERED";
       reason = "approved-interpreter-anomaly";
@@ -641,6 +645,25 @@ describe("Vertex native interpreter anomaly in stream mode and its first-city va
       name: "an empty first city",
       edit: (chunks) => {
         interpreter(chunks).args = { code: "print(default_api.archive(cities=['" };
+      },
+      error: /contradictory-target/,
+    },
+    ...[
+      ["an empty quoted city", "''"],
+      ["a whitespace-only city", "   "],
+      ["a finished archive call", "Tokyo'])"],
+      ["trailing code after the city list", "Tokyo'] + x"],
+    ].map(([name, rest]) => ({
+      name,
+      edit: (chunks: JsonObject[]) => {
+        interpreter(chunks).args = { code: `${INTERPRETER_PREFIX}${rest}` };
+      },
+      error: /contradictory-target/,
+    })),
+    {
+      name: "leading code before the archive call",
+      edit: (chunks) => {
+        interpreter(chunks).args = { code: `x = 1; ${INTERPRETER_PREFIX}Paris` };
       },
       error: /contradictory-target/,
     },
