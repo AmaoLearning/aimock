@@ -168,7 +168,14 @@ function compareVertexObservation(
     );
     if (candidate.finishMessage !== undefined)
       assert(typeof candidate.finishMessage === "string", "invalid finish message");
-    if (candidate.content !== undefined) {
+    // Native object-mode malformed-function terminals may carry `content: {}` (no keys) instead
+    // of omitting content; treat exactly that as absent. Any other content stays strict.
+    const emptyMalformedContent =
+      origin === "native" &&
+      candidate.finishReason === "MALFORMED_FUNCTION_CALL" &&
+      isObject(candidate.content) &&
+      Object.keys(candidate.content).length === 0;
+    if (candidate.content !== undefined && !emptyMalformedContent) {
       assert(
         isObject(candidate.content) &&
           candidate.content.role === "model" &&
@@ -386,6 +393,65 @@ describe("Vertex retained native dispositions (offline SDK/HTTP replay)", () => 
     );
     expect(result.rawHash).toBe(cell.rawHash);
     console.info(JSON.stringify(result));
+  });
+});
+
+// Byte-exact native k5-object capture from Drift Tests run 38104122278 (2026-10-11): in object
+// mode Vertex served the malformed-function terminal with an empty `content: {}` object instead of
+// omitting content (as the retained k5-stream capture does). Response-only; no request headers.
+const malformedEmptyContent: RetainedCase = {
+  id: "k5-object",
+  stream: false,
+  raw: '{\n  "candidates": [\n    {\n      "content": {},\n      "finishReason": "MALFORMED_FUNCTION_CALL",\n      "finishMessage": "Malformed function call: print(default_api.archive(cities=[\'Tokyo"\n    }\n  ],\n  "usageMetadata": {\n    "promptTokenCount": 34,\n    "totalTokenCount": 34,\n    "trafficType": "ON_DEMAND",\n    "promptTokensDetails": [\n      {\n        "modality": "TEXT",\n        "tokenCount": 34\n      }\n    ]\n  },\n  "modelVersion": "gemini-2.5-flash",\n  "createTime": "2026-10-11T02:08:24.591372Z",\n  "responseId": "mO_KaoyMJNLygLUPqbWDoAs"\n}\n',
+  rawHash: "4c38ba91587ac63d5cdf2c25209743d1670fd67dc01b53b2b6d93aa0948477eb",
+  requestHash: "9a2018221c7e7d8776e40ea38a631585b00e705349d81052d98621d0bc1f3fba",
+};
+function editMalformedEmptyContent(edit: (candidate: JsonObject) => void) {
+  const chunk = parseJson(malformedEmptyContent.raw);
+  assert(isObject(chunk) && Array.isArray(chunk.candidates) && isObject(chunk.candidates[0]));
+  edit(chunk.candidates[0]);
+  return JSON.stringify(chunk);
+}
+
+describe("Vertex native malformed-function terminal with empty content", () => {
+  it("classifies the captured empty-content object as an approved non-trigger", async () => {
+    expect(sha256(malformedEmptyContent.raw)).toBe(malformedEmptyContent.rawHash);
+    const { observation, decoded } = await replay(malformedEmptyContent);
+    const result = compareVertexObservation(malformedEmptyContent, observation, decoded, "native");
+    expect(result.classification).toBe("NOT_TRIGGERED");
+    expect(result.reason).toBe("malformed-function-terminal");
+    expect(result.terminal).toBe("MALFORMED_FUNCTION_CALL");
+    expect(result.rawHash).toBe(malformedEmptyContent.rawHash);
+  });
+
+  it("rejects the same empty content on the modeled leg", async () => {
+    const { observation, decoded } = await replay(malformedEmptyContent);
+    expect(() =>
+      compareVertexObservation(malformedEmptyContent, observation, decoded, "modeled"),
+    ).toThrow(/invalid content/);
+  });
+
+  it.each<{ name: string; content: JsonObject }>([
+    { name: "non-model role", content: { role: "user" } },
+    { name: "non-array parts", content: { parts: "x" } },
+  ])("rejects malformed-function content with $name", async ({ content }) => {
+    const raw = editMalformedEmptyContent((candidate) => {
+      candidate.content = content;
+    });
+    const { observation, decoded } = await replay(malformedEmptyContent, raw);
+    expect(() =>
+      compareVertexObservation(malformedEmptyContent, observation, decoded, "native"),
+    ).toThrow(/invalid content/);
+  });
+
+  it.each(["STOP", "MAX_TOKENS"])("rejects empty content with a %s terminal", async (reason) => {
+    const raw = editMalformedEmptyContent((candidate) => {
+      candidate.finishReason = reason;
+    });
+    const { observation, decoded } = await replay(malformedEmptyContent, raw);
+    expect(() =>
+      compareVertexObservation(malformedEmptyContent, observation, decoded, "native"),
+    ).toThrow(/invalid content/);
   });
 });
 
