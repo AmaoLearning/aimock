@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { readFile } from "node:fs/promises";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses";
 import { LLMock } from "../../llmock.js";
 import type { ServerInstance } from "../../server.js";
@@ -24,7 +25,14 @@ import {
   type ResponsesWSRequestOptions,
 } from "./ws-providers.js";
 import { resolveLiveModel, isInfraSkip, isModelNotFound, listOpenAIModels } from "./providers.js";
-import { startDriftServer, stopDriftServer, collectMockWSMessages } from "./helpers.js";
+import {
+  startDriftServer,
+  stopDriftServer,
+  collectMockWSMessages,
+  OPENAI_K9_SUMMARY_SHAPES,
+  matchOpenAIK9SummaryShape,
+  isOpenAIModelSnapshot,
+} from "./helpers.js";
 import { connectWebSocket } from "../ws-test-client.js";
 
 // ---------------------------------------------------------------------------
@@ -338,22 +346,34 @@ async function localWSExhaustion(scenario: ExhaustionCase): Promise<ResponseStre
   }
 }
 
-function inspectWSExhaustion(events: ResponseStreamEvent[], kind: "K5" | "K9") {
+function inspectWSExhaustion(
+  events: ResponseStreamEvent[],
+  kind: "K5" | "K9",
+  side: "native" | "localhost",
+) {
   const order = events
     .map((event) => event.type)
     .filter((type, index, types) => !type.endsWith(".delta") || type !== types[index - 1]);
+  // Live K9 streams one of three named summary shapes at random (see
+  // OPENAI_K9_SUMMARY_SHAPES for the measured frequencies). Only the native
+  // side may vary; localhost must still emit the full summary.
+  const summaryShape =
+    kind === "K9" && side === "native"
+      ? matchOpenAIK9SummaryShape(order.slice(3, -2))
+      : ("full-summary" as const);
+  if (summaryShape === undefined) {
+    throw new Error(
+      `live K9 event order matches none of the accepted summary shapes ` +
+        `(${Object.keys(OPENAI_K9_SUMMARY_SHAPES).join(", ")}): ${order.join(", ")}`,
+    );
+  }
   expect(order).toEqual([
     "response.created",
     "response.in_progress",
     "response.output_item.added",
     ...(kind === "K5"
       ? ["response.function_call_arguments.delta", "response.function_call_arguments.done"]
-      : [
-          "response.reasoning_summary_part.added",
-          "response.reasoning_summary_text.delta",
-          "response.reasoning_summary_text.done",
-          "response.reasoning_summary_part.done",
-        ]),
+      : OPENAI_K9_SUMMARY_SHAPES[summaryShape]),
     "response.output_item.done",
     "response.incomplete",
   ]);
@@ -419,38 +439,61 @@ function inspectWSExhaustion(events: ResponseStreamEvent[], kind: "K5" | "K9") {
     const partAdded = events.filter(
       (event) => event.type === "response.reasoning_summary_part.added",
     );
-    expect(partAdded).toHaveLength(1);
     const partDone = events.filter(
       (event) => event.type === "response.reasoning_summary_part.done",
     );
-    expect(textDone).toHaveLength(1);
-    expect(partDone).toHaveLength(1);
+    const closed = summaryShape === "full-summary";
+    expect(partAdded).toHaveLength(summaryShape === "no-summary" ? 0 : 1);
+    expect(textDone).toHaveLength(closed ? 1 : 0);
+    expect(partDone).toHaveLength(closed ? 1 : 0);
     for (const event of [...partAdded, ...deltas, ...textDone, ...partDone]) {
       expect(event.item_id).toBe(item.id);
       expect(event.output_index).toBe(0);
       expect(event.summary_index).toBe(0);
     }
     text = deltas.map((event) => event.delta).join("");
-    expect(text.length).toBeGreaterThan(0);
-    // The retained real K9 capture has one item/part whose streamed draft
-    // differs from text.done. Final-summary events agree with each other;
-    // delta-to-final equality is not part of the exhaustion contract.
-    text = textDone[0].text;
-    expect(text.length).toBeGreaterThan(0);
-    expect(partDone[0].part).toEqual({ type: "summary_text", text });
-    expect(item.summary).toEqual([{ type: "summary_text", text }]);
+    expect(text.length > 0).toBe(summaryShape !== "no-summary");
+    if (closed) {
+      // The retained real K9 capture has one item/part whose streamed draft
+      // differs from text.done. Final-summary events agree with each other;
+      // delta-to-final equality is not part of the exhaustion contract.
+      text = textDone[0].text;
+      expect(text.length).toBeGreaterThan(0);
+      expect(partDone[0].part).toEqual({ type: "summary_text", text });
+      expect(item.summary).toEqual([{ type: "summary_text", text }]);
+    } else {
+      // The cap landed before the summary closed: the final item carries none.
+      expect(item.summary).toEqual([]);
+    }
     expect(done[0].item.summary).toEqual(item.summary);
+    if (side === "native") {
+      // Every accepted live shape spent no output tokens on the requested model.
+      expect(terminal.response.usage?.output_tokens).toBe(0);
+      const requested = exhaustionCases.find((scenario) => scenario.kind === kind)!.model;
+      expect(isOpenAIModelSnapshot(terminal.response.model, requested)).toBe(true);
+      for (const event of events) {
+        if (event.type === "response.created" || event.type === "response.in_progress") {
+          expect(event.response.model).toBe(terminal.response.model);
+        }
+      }
+    }
   }
   return {
-    order,
+    // The event order outside the reasoning-summary run, which every accepted
+    // native shape shares with localhost.
+    frame: order.filter((type) => !type.startsWith("response.reasoning_summary_")),
     status: terminal.response.status,
     reason: terminal.response.incomplete_details?.reason,
   };
 }
 
-function gradeWSExhaustion(events: ResponseStreamEvent[], kind: "K5" | "K9", side: string) {
+function gradeWSExhaustion(
+  events: ResponseStreamEvent[],
+  kind: "K5" | "K9",
+  side: "native" | "localhost",
+) {
   try {
-    return inspectWSExhaustion(events, kind);
+    return inspectWSExhaustion(events, kind, side);
   } catch (error) {
     throw new Error(
       formatDriftReport(
@@ -480,6 +523,124 @@ describe("Responses WS exhaustion local contract", () => {
       gradeWSExhaustion(events, scenario.kind, "localhost");
     });
   }
+});
+
+async function compareWSExhaustion(scenario: ExhaustionCase, nativeEvents: ResponseStreamEvent[]) {
+  const native = gradeWSExhaustion(nativeEvents, scenario.kind, "native");
+  const localEvents = await localWSExhaustion(scenario);
+  expect(gradeWSExhaustion(localEvents, scenario.kind, "localhost")).toEqual(native);
+  const sdk = [
+    ...openaiResponsesTextEventShapes().filter(
+      (event) => event.type === "response.created" || event.type === "response.in_progress",
+    ),
+    ...(scenario.kind === "K5"
+      ? openaiResponsesToolCallEventShapes()
+      : openaiResponsesReasoningEventShapes()),
+  ];
+  const diffs = compareSSESequences(
+    sdk,
+    nativeEvents.map((event) => ({
+      type: event.type ?? "unknown",
+      dataShape: extractShape(event),
+    })),
+    localEvents.map((event) => ({ type: event.type, dataShape: extractShape(event) })),
+  );
+  expect(
+    diffs.filter((diff) => diff.severity === "critical"),
+    formatDriftReport(`Responses WS ${scenario.kind}`, diffs, "openai-responses-ws"),
+  ).toEqual([]);
+}
+
+// Retained live o4-mini K9 WS native events captured 2026-10-10 from the exact
+// K9 request above, one per accepted native summary shape. They replay without
+// a credential so the variant grading and its rejections stay checked.
+const K9_NATIVE_REPLAYS = ["full-summary", "no-summary", "unclosed-summary"] as const;
+const k9Case = exhaustionCases.find((scenario) => scenario.kind === "K9")!;
+
+async function readK9NativeReplay(
+  shape: (typeof K9_NATIVE_REPLAYS)[number],
+): Promise<ResponseStreamEvent[]> {
+  return JSON.parse(
+    await readFile(new URL(`./fixtures/ws-responses-k9-${shape}.json`, import.meta.url), "utf8"),
+  );
+}
+
+describe("Responses WS K9 native variant replay", () => {
+  it.each(K9_NATIVE_REPLAYS)(
+    "retained %s native events agree with actual localhost",
+    async (shape) => {
+      await compareWSExhaustion(k9Case, await readK9NativeReplay(shape));
+    },
+  );
+
+  it.each(K9_NATIVE_REPLAYS)(
+    "retained %s native events reject a wrong terminal status, nonzero output tokens or another model",
+    async (shape) => {
+      const events = await readK9NativeReplay(shape);
+      const terminal = events.at(-1);
+      if (terminal?.type !== "response.incomplete") throw new Error("Missing incomplete terminal");
+      expect(terminal.response.status).toBe("incomplete");
+      expect(terminal.response.usage?.output_tokens).toBe(0);
+      const wrongStatus = structuredClone(events);
+      const statusTerminal = wrongStatus.at(-1);
+      if (statusTerminal?.type !== "response.incomplete") throw new Error("Missing terminal");
+      statusTerminal.response.status = "completed";
+      expect(() => inspectWSExhaustion(wrongStatus, "K9", "native")).toThrow();
+      const spentTokens = structuredClone(events);
+      const tokenTerminal = spentTokens.at(-1);
+      if (tokenTerminal?.type !== "response.incomplete" || !tokenTerminal.response.usage)
+        throw new Error("Missing terminal usage");
+      tokenTerminal.response.usage.output_tokens = 7;
+      expect(() => inspectWSExhaustion(spentTokens, "K9", "native")).toThrow();
+      expect(terminal.response.model).toBe("o4-mini-2025-04-16");
+      const otherModel = structuredClone(events);
+      for (const event of otherModel) {
+        if (
+          event.type === "response.created" ||
+          event.type === "response.in_progress" ||
+          event.type === "response.incomplete"
+        )
+          event.response.model = "gpt-4.1-mini-2025-04-14";
+      }
+      expect(() => inspectWSExhaustion(otherModel, "K9", "native")).toThrow();
+      // A valid-looking snapshot on the terminal alone must still disagree
+      // with created/in_progress.
+      const terminalModel = structuredClone(events);
+      const modelTerminal = terminalModel.at(-1);
+      if (modelTerminal?.type !== "response.incomplete") throw new Error("Missing terminal");
+      modelTerminal.response.model = "o4-mini-2099-01-01";
+      expect(() => inspectWSExhaustion(terminalModel, "K9", "native")).toThrow();
+    },
+  );
+
+  it("rejects an 8-event out-of-order native summary sequence", async () => {
+    const events = await readK9NativeReplay("full-summary");
+    const textDone = events.filter(
+      (event) => event.type === "response.reasoning_summary_text.done",
+    );
+    const reordered = events
+      .filter(
+        (event) =>
+          event.type !== "response.reasoning_summary_part.added" &&
+          event.type !== "response.reasoning_summary_text.done",
+      )
+      .flatMap((event): ResponseStreamEvent[] =>
+        event.type === "response.reasoning_summary_part.done" ? [event, ...textDone] : [event],
+      );
+    expect(textDone).toHaveLength(1);
+    expect(events.length - reordered.length).toBe(1);
+    expect(() => inspectWSExhaustion(reordered, "K9", "native")).toThrow(
+      /matches none of the accepted summary shapes/,
+    );
+  });
+
+  it.each(["no-summary", "unclosed-summary"] as const)(
+    "localhost grading still rejects the %s native shape",
+    async (shape) => {
+      const events = await readK9NativeReplay(shape);
+      expect(() => inspectWSExhaustion(events, "K9", "localhost")).toThrow(/deeply equal/);
+    },
+  );
 });
 
 // Two generation sends maximum in this block; no retries, discovery or fallback.
@@ -516,30 +677,7 @@ describe.skipIf(!OPENAI_API_KEY)("OpenAI Responses WS exhaustion live drift", ()
         );
         // The SDK union supplies event discriminators; semantic validation below
         // still grades the untrusted native response, including error terminals.
-        const native = gradeWSExhaustion(
-          result.rawMessages as ResponseStreamEvent[],
-          scenario.kind,
-          "native",
-        );
-        const localEvents = await localWSExhaustion(scenario);
-        expect(gradeWSExhaustion(localEvents, scenario.kind, "localhost")).toEqual(native);
-        const sdk = [
-          ...openaiResponsesTextEventShapes().filter(
-            (event) => event.type === "response.created" || event.type === "response.in_progress",
-          ),
-          ...(scenario.kind === "K5"
-            ? openaiResponsesToolCallEventShapes()
-            : openaiResponsesReasoningEventShapes()),
-        ];
-        const diffs = compareSSESequences(
-          sdk,
-          result.events,
-          localEvents.map((event) => ({ type: event.type, dataShape: extractShape(event) })),
-        );
-        expect(
-          diffs.filter((diff) => diff.severity === "critical"),
-          formatDriftReport(`Responses WS ${scenario.kind}`, diffs, "openai-responses-ws"),
-        ).toEqual([]);
+        await compareWSExhaustion(scenario, result.rawMessages as ResponseStreamEvent[]);
       } catch (error) {
         exhaustionStopped = true;
         if (error instanceof WSHandshakeError && isInfraSkip(error.status)) {

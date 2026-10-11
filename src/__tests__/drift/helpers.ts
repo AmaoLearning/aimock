@@ -313,3 +313,62 @@ export async function collectMockWSMessages(
 
   return { events, rawMessages };
 }
+
+// ---------------------------------------------------------------------------
+// OpenAI Responses K9 (reasoning-only max_output_tokens exhaustion)
+// ---------------------------------------------------------------------------
+
+/**
+ * The reasoning-summary event runs that live OpenAI streams for the K9
+ * exhaustion request (o4-mini, effort high, summary auto, max_output_tokens 32)
+ * between `response.output_item.added` and `response.output_item.done`.
+ *
+ * The same request picks one at random. Measured 2026-10-10, every run ended
+ * `response.incomplete`/`max_output_tokens` with `output_tokens: 0` on
+ * o4-mini-2025-04-16:
+ * - HTTP, 22 runs: full-summary 16, no-summary 4, unclosed-summary 2.
+ * - WS, 10 runs: full-summary 5, no-summary 3, unclosed-summary 2.
+ *
+ * Live/native grading accepts exactly these three. aimock's localhost stream
+ * must still emit `full-summary`.
+ */
+export const OPENAI_K9_SUMMARY_SHAPES = {
+  /** Summary part opened, streamed, and closed; the final item carries it. */
+  "full-summary": [
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.done",
+    "response.reasoning_summary_part.done",
+  ],
+  /** No summary events at all; the final item has `summary: []`. */
+  "no-summary": [],
+  /** Summary part opened and streamed but never closed; the final item has `summary: []`. */
+  "unclosed-summary": [
+    "response.reasoning_summary_part.added",
+    "response.reasoning_summary_text.delta",
+  ],
+} as const satisfies Record<string, readonly string[]>;
+
+export type OpenAIK9SummaryShape = keyof typeof OPENAI_K9_SUMMARY_SHAPES;
+
+/** Names the accepted K9 summary shape whose run equals `summaryOrder` exactly. */
+export function matchOpenAIK9SummaryShape(
+  summaryOrder: readonly string[],
+): OpenAIK9SummaryShape | undefined {
+  return (Object.keys(OPENAI_K9_SUMMARY_SHAPES) as OpenAIK9SummaryShape[]).find((shape) => {
+    const expected: readonly string[] = OPENAI_K9_SUMMARY_SHAPES[shape];
+    return (
+      expected.length === summaryOrder.length &&
+      expected.every((type, index) => type === summaryOrder[index])
+    );
+  });
+}
+
+/** True when `served` is the requested OpenAI model or one of its dated snapshots. */
+export function isOpenAIModelSnapshot(served: string, requested: string): boolean {
+  return (
+    served === requested ||
+    (served.startsWith(`${requested}-`) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(served.slice(requested.length + 1)))
+  );
+}
