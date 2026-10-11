@@ -135,33 +135,67 @@ function cohereChatStreamEventShapes(): SSEEventShape[] {
 }
 
 /**
- * Parse a Cohere v2 SSE body. Every frame is `event: <type>` + `data: <json>`
- * whose JSON `type` equals the event name; a final `data: [DONE]` sentinel is
- * allowed and dropped. Any other frame throws, so a framing change is loud
- * instead of silently parsing to an empty list.
+ * Parse a Cohere v2 SSE body by the SSE spec (WHATWG event-stream): lines end
+ * in `\n`, `\r\n` or `\r`; a blank line dispatches the event; `:` lines are
+ * comments; one space after the field colon is optional; `id`/`retry` and
+ * unknown fields are ignored; multiple `data` lines join with `\n`; a final
+ * event without a blank line is still dispatched. A `data: [DONE]` sentinel
+ * with no event name ends the stream and is dropped.
+ *
+ * Still strict on content: each event's data must be a JSON object whose
+ * `type` equals the event name (an event without `event:` is named `message`
+ * by the spec, so it fails that check), and nothing may follow `[DONE]`.
  */
 function parseCohereSSE(body: string): { type: string; data: Record<string, unknown> }[] {
-  const frames = body
-    .replace(/\r\n/g, "\n")
-    .split("\n\n")
-    .filter((frame) => frame.trim() !== "");
-  if (frames.at(-1) === "data: [DONE]") frames.pop();
-  return frames.map((frame) => {
-    const lines = frame.split("\n");
-    if (lines.length !== 2 || !lines[0].startsWith("event: ") || !lines[1].startsWith("data: ")) {
-      throw new Error(`Unsupported Cohere SSE frame: ${JSON.stringify(frame)}`);
+  const events: { type: string; data: Record<string, unknown> }[] = [];
+  let eventName = "";
+  let dataLines: string[] = [];
+  let done = false;
+
+  const dispatch = () => {
+    const name = eventName || "message";
+    const hadData = dataLines.length > 0;
+    const raw = dataLines.join("\n");
+    eventName = "";
+    dataLines = [];
+    if (!hadData) return;
+    if (done) throw new Error(`Cohere SSE event after [DONE]: ${JSON.stringify(raw)}`);
+    if (name === "message" && raw === "[DONE]") {
+      done = true;
+      return;
     }
-    const type = lines[0].slice("event: ".length);
-    const data: unknown = JSON.parse(lines[1].slice("data: ".length));
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(`Cohere SSE data is not JSON: ${JSON.stringify(raw)}`);
+    }
     if (data === null || typeof data !== "object" || Array.isArray(data)) {
-      throw new Error(`Cohere SSE data is not an object: ${JSON.stringify(frame)}`);
+      throw new Error(`Cohere SSE data is not an object: ${JSON.stringify(raw)}`);
     }
     const record = data as Record<string, unknown>;
-    if (record.type !== type) {
-      throw new Error(`Cohere SSE event name ${type} != data.type ${String(record.type)}`);
+    if (record.type !== name) {
+      throw new Error(`Cohere SSE event name ${name} != data.type ${String(record.type)}`);
     }
-    return { type, data: record };
-  });
+    events.push({ type: name, data: record });
+  };
+
+  for (const line of body.split(/\r\n|\r|\n/)) {
+    if (line === "") {
+      dispatch();
+      continue;
+    }
+    if (line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") eventName = value;
+    else if (field === "data") dataLines.push(value);
+    // id, retry and unknown fields are ignored per the SSE spec.
+  }
+  dispatch();
+  return events;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,12 +590,41 @@ describe("parseCohereSSE", () => {
     ]);
   });
 
-  it("rejects frames it does not understand instead of dropping them", () => {
-    expect(() => parseCohereSSE('data: {"type":"message-start"}\n\n')).toThrow(/Unsupported/);
+  it("accepts legal SSE variants a server or proxy may send", () => {
+    const start = '{"type":"message-start","id":"x"}';
+    const end = '{"type":"message-end","delta":{}}';
+    const expected = ["message-start", "message-end"];
+    const variants: Record<string, string> = {
+      canonical: `event: message-start\ndata: ${start}\n\nevent: message-end\ndata: ${end}\n\ndata: [DONE]\n\n`,
+      "single trailing newline": `event: message-start\ndata: ${start}\n\nevent: message-end\ndata: ${end}\n`,
+      "no trailing newline": `event: message-start\ndata: ${start}\n\nevent: message-end\ndata: ${end}`,
+      "no space after colon": `event:message-start\ndata:${start}\n\nevent:message-end\ndata:${end}\n\n`,
+      "keepalive comments": `: ping\n\nevent: message-start\n:mid-frame comment\ndata: ${start}\n\n:\n\nevent: message-end\ndata: ${end}\n\n`,
+      "id and retry fields": `retry: 3000\n\nid: 1\nevent: message-start\ndata: ${start}\n\nid: 2\nevent: message-end\nretry: 10\ndata: ${end}\n\n`,
+      CRLF: `event: message-start\r\ndata: ${start}\r\n\r\nevent: message-end\r\ndata: ${end}\r\n\r\ndata: [DONE]\r\n\r\n`,
+      CR: `event: message-start\rdata: ${start}\r\revent: message-end\rdata: ${end}\r\r`,
+      "multi-line data": `event: message-start\ndata: {"type":\ndata: "message-start"}\n\nevent: message-end\ndata: ${end}\n\n`,
+    };
+    for (const [name, body] of Object.entries(variants)) {
+      expect(
+        parseCohereSSE(body).map((e) => e.type),
+        name,
+      ).toEqual(expected);
+    }
+  });
+
+  it("rejects malformed data, mismatched names and events after [DONE]", () => {
+    expect(() => parseCohereSSE("event: message-start\ndata: {not json\n\n")).toThrow(/not JSON/);
+    expect(() => parseCohereSSE("event: content-end\ndata: [1]\n\n")).toThrow(/not an object/);
+    expect(() => parseCohereSSE("event: content-end\ndata: null\n\n")).toThrow(/not an object/);
     expect(() => parseCohereSSE('event: content-end\ndata: {"type":"content-start"}\n\n')).toThrow(
       /event name/,
     );
-    expect(() => parseCohereSSE("event: content-end\ndata: [1]\n\n")).toThrow(/not an object/);
+    // No event: line -> the spec names it "message", which never matches data.type.
+    expect(() => parseCohereSSE('data: {"type":"message-start"}\n\n')).toThrow(/event name/);
+    expect(() =>
+      parseCohereSSE('data: [DONE]\n\nevent: content-end\ndata: {"type":"content-end"}\n\n'),
+    ).toThrow(/after \[DONE\]/);
   });
 });
 
