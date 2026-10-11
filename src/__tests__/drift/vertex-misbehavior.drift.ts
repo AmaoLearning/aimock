@@ -26,6 +26,10 @@ interface RetainedCase {
 }
 const MODEL = "gemini-2.5-flash";
 const INTERPRETER_CODE = "print(default_api.archive(cities=['Tokyo";
+// Exact first-city variants of the native interpreter anomaly. Measured live 2026-10-11 over 120
+// k5 runs: 59 Tokyo, 3 London. The K5 prompt names no cities ("200 distinct full city names"), so
+// there is no request-derived set; the list is observation-only and unobserved cities still fail.
+const INTERPRETER_CODES = [INTERPRETER_CODE, "print(default_api.archive(cities=['London"];
 const MAX_BODY_BYTES = 256 * 1024;
 
 function isObject(value: Json | undefined): value is JsonObject {
@@ -211,17 +215,38 @@ function compareVertexObservation(
   let classification: "TARGET_COMPARED" | "NOT_TRIGGERED";
   let reason: string;
   if (cell.id.startsWith("k5")) {
-    const call = parts.length === 1 ? parts[0].functionCall : undefined;
+    const call = parts.length > 0 ? parts[0].functionCall : undefined;
+    // Object mode: the call is the only part. Stream mode splits it across two chunks: chunk 1
+    // carries only the call, chunk 2 is the MAX_TOKENS terminal carrying exactly one empty,
+    // non-thought text part (32/60 live k5-stream runs, 2026-10-11). Any other placement or extra
+    // part stays a contradiction.
+    const chunkParts = chunks.map((chunk) => {
+      const first =
+        isObject(chunk) && Array.isArray(chunk.candidates) ? chunk.candidates[0] : undefined;
+      return isObject(first) && isObject(first.content) && Array.isArray(first.content.parts)
+        ? first.content.parts
+        : [];
+    });
+    const anomalyParts = cell.stream
+      ? chunks.length === 2 &&
+        // parts[0] (checked below as the interpreter call) is then chunk 1's only part.
+        chunkParts[0].length === 1 &&
+        chunkParts[1].length === 1 &&
+        isObject(chunkParts[1][0]) &&
+        Object.keys(chunkParts[1][0]).length === 1 &&
+        chunkParts[1][0].text === ""
+      : parts.length === 1;
     const anomaly =
       origin === "native" &&
-      !cell.stream &&
+      anomalyParts &&
       terminal === "MAX_TOKENS" &&
       isObject(call) &&
       call.name === "google:python_interpreter" &&
       Object.keys(call).length === 2 &&
       isObject(call.args) &&
       Object.keys(call.args).length === 1 &&
-      call.args.code === INTERPRETER_CODE;
+      typeof call.args.code === "string" &&
+      INTERPRETER_CODES.includes(call.args.code);
     if (anomaly) {
       classification = "NOT_TRIGGERED";
       reason = "approved-interpreter-anomaly";
@@ -474,6 +499,219 @@ describe("Vertex native malformed-function terminal with empty content", () => {
     expect(result.classification).toBe("NOT_TRIGGERED");
     expect(result.reason).toBe("malformed-function-terminal");
     expect(result.chunks).toHaveLength(1);
+  });
+});
+
+// Byte-exact native k5-stream capture from Drift Tests run 38158387279 (2026-10-11), plus local
+// London-variant captures (2026-10-11). Response-only; no request headers or credentials.
+// Streaming splits the interpreter anomaly across two chunks: the call, then a MAX_TOKENS terminal
+// carrying one empty text part. Measured live (2026-10-11, exact drift request, n=60 per mode):
+// k5-stream 30 Tokyo + 2 London interpreter anomalies, 28 malformed-function terminals; k5-object
+// 29 Tokyo + 1 London interpreter anomalies, 30 malformed-function terminals.
+const interpreterStream: RetainedCase = {
+  id: "k5-stream",
+  stream: true,
+  raw: 'data: {"candidates": [{"content": {"role": "model","parts": [{"functionCall": {"name": "google:python_interpreter","args": {"code": "print(default_api.archive(cities=[\'Tokyo"}}}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-2.5-flash","createTime": "2026-10-11T17:09:25.231112Z","responseId": "xcLLasiNDpTbgLUPwMDKgAk"}\r\n\r\ndata: {"candidates": [{"content": {"role": "model","parts": [{"text": ""}]},"finishReason": "MAX_TOKENS"}],"usageMetadata": {"promptTokenCount": 34,"candidatesTokenCount": 11,"totalTokenCount": 45,"trafficType": "ON_DEMAND","promptTokensDetails": [{"modality": "TEXT","tokenCount": 34}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 11}]},"modelVersion": "gemini-2.5-flash","createTime": "2026-10-11T17:09:25.231112Z","responseId": "xcLLasiNDpTbgLUPwMDKgAk"}\r\n\r\n',
+  rawHash: "6c438263ff860f73364786968bb01fbd82afe7c6fdd06442035989017e7787a5",
+  requestHash: "9a2018221c7e7d8776e40ea38a631585b00e705349d81052d98621d0bc1f3fba",
+};
+const interpreterStreamLondon: RetainedCase = {
+  ...interpreterStream,
+  raw: 'data: {"candidates": [{"content": {"role": "model","parts": [{"functionCall": {"name": "google:python_interpreter","args": {"code": "print(default_api.archive(cities=[\'London"}}}]}}],"usageMetadata": {"trafficType": "ON_DEMAND"},"modelVersion": "gemini-2.5-flash","createTime": "2026-10-11T17:17:16.118803Z","responseId": "nMTLapOgB4Wi7rcPn6C4qA0"}\r\n\r\ndata: {"candidates": [{"content": {"role": "model","parts": [{"text": ""}]},"finishReason": "MAX_TOKENS"}],"usageMetadata": {"promptTokenCount": 34,"candidatesTokenCount": 11,"totalTokenCount": 45,"trafficType": "ON_DEMAND","promptTokensDetails": [{"modality": "TEXT","tokenCount": 34}],"candidatesTokensDetails": [{"modality": "TEXT","tokenCount": 11}]},"modelVersion": "gemini-2.5-flash","createTime": "2026-10-11T17:17:16.118803Z","responseId": "nMTLapOgB4Wi7rcPn6C4qA0"}\r\n\r\n',
+  rawHash: "8b27e2f3ddf5003a4d2ed53c5861dabf99e0be0c303e786ebc898c37a5532a8d",
+};
+const interpreterObjectLondon: RetainedCase = {
+  id: "k5-object",
+  stream: false,
+  raw: '{\n  "candidates": [\n    {\n      "content": {\n        "role": "model",\n        "parts": [\n          {\n            "functionCall": {\n              "name": "google:python_interpreter",\n              "args": {\n                "code": "print(default_api.archive(cities=[\'London"\n              }\n            }\n          }\n        ]\n      },\n      "finishReason": "MAX_TOKENS"\n    }\n  ],\n  "usageMetadata": {\n    "promptTokenCount": 34,\n    "candidatesTokenCount": 11,\n    "totalTokenCount": 45,\n    "trafficType": "ON_DEMAND",\n    "promptTokensDetails": [\n      {\n        "modality": "TEXT",\n        "tokenCount": 34\n      }\n    ],\n    "candidatesTokensDetails": [\n      {\n        "modality": "TEXT",\n        "tokenCount": 11\n      }\n    ]\n  },\n  "modelVersion": "gemini-2.5-flash",\n  "createTime": "2026-10-11T17:19:41.490500Z",\n  "responseId": "LcXLaoT4Hf-EufoPrL-tgA4"\n}\n',
+  rawHash: "d45618d070ebbb49fa9fc6c5e2edf600bff97aac474645a60161b411e5bf30b1",
+  requestHash: "9a2018221c7e7d8776e40ea38a631585b00e705349d81052d98621d0bc1f3fba",
+};
+function editInterpreterStream(edit: (chunks: JsonObject[]) => void) {
+  return derivative(interpreterStream, edit);
+}
+
+describe("Vertex native interpreter anomaly in stream mode and its first-city variants", () => {
+  it.each([interpreterStream, interpreterStreamLondon, interpreterObjectLondon])(
+    "classifies captured $id $rawHash as the approved interpreter anomaly",
+    async (cell) => {
+      expect(sha256(cell.raw)).toBe(cell.rawHash);
+      const { observation, decoded } = await replay(cell);
+      const result = compareVertexObservation(cell, observation, decoded, "native");
+      expect(result.classification).toBe("NOT_TRIGGERED");
+      expect(result.reason).toBe("approved-interpreter-anomaly");
+      expect(result.terminal).toBe("MAX_TOKENS");
+      expect(result.rawHash).toBe(cell.rawHash);
+    },
+  );
+
+  it.each([interpreterStream, interpreterStreamLondon, interpreterObjectLondon])(
+    "rejects captured $id $rawHash on the modeled leg",
+    async (cell) => {
+      const { observation, decoded } = await replay(cell);
+      expect(() => compareVertexObservation(cell, observation, decoded, "modeled")).toThrow(
+        /contradictory-target/,
+      );
+    },
+  );
+
+  it.each<{ name: string; edit: (chunks: JsonObject[]) => void; error: RegExp }>([
+    {
+      name: "a STOP terminal",
+      edit: (chunks) => {
+        candidate(chunks[1]).finishReason = "STOP";
+      },
+      error: /unexpected archive tool schema/,
+    },
+    {
+      name: "a SAFETY terminal",
+      edit: (chunks) => {
+        candidate(chunks[1]).finishReason = "SAFETY";
+      },
+      error: /unapproved K5 outcome/,
+    },
+    {
+      name: "a non-interpreter function name",
+      edit: (chunks) => {
+        interpreter(chunks).name = "other_interpreter";
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "the declared archive tool",
+      edit: (chunks) => {
+        const call = interpreter(chunks);
+        call.name = "archive";
+        call.args = { cities: ["Tokyo"] };
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "non-empty terminal text",
+      edit: (chunks) => {
+        contentParts(chunks[1])[0] = { text: "x" };
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "a thought terminal part",
+      edit: (chunks) => {
+        contentParts(chunks[1])[0] = { text: "", thought: true };
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "an extra terminal part",
+      edit: (chunks) => {
+        contentParts(chunks[1]).push({ text: "" });
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "an unobserved first city",
+      edit: (chunks) => {
+        interpreter(chunks).args = { code: "print(default_api.archive(cities=['Paris" };
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "an extra interpreter argument",
+      edit: (chunks) => {
+        interpreter(chunks).args = { code: INTERPRETER_CODE, extra: 1 };
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "an extra call field",
+      edit: (chunks) => {
+        interpreter(chunks).id = "new-field";
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "the call and empty text merged into one chunk",
+      edit: (chunks) => {
+        contentParts(chunks[0]).push({ text: "" });
+        candidate(chunks[0]).finishReason = "MAX_TOKENS";
+        chunks[0].usageMetadata = chunks[1].usageMetadata;
+        chunks.splice(1);
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "an empty first chunk and the call plus text in the terminal",
+      edit: (chunks) => {
+        const call = contentParts(chunks[0]).splice(0);
+        contentParts(chunks[1]).unshift(...call);
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "the call and text in the first chunk and an empty terminal",
+      edit: (chunks) => {
+        contentParts(chunks[0]).push(...contentParts(chunks[1]).splice(0));
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "the call in the terminal and the text in the first chunk",
+      edit: (chunks) => {
+        const call = contentParts(chunks[0]).splice(0);
+        contentParts(chunks[0]).push(...contentParts(chunks[1]).splice(0));
+        contentParts(chunks[1]).push(...call);
+      },
+      error: /contradictory-target/,
+    },
+    {
+      name: "a second interpreter call",
+      edit: (chunks) => {
+        contentParts(chunks[0]).push({
+          functionCall: { name: "google:python_interpreter", args: { code: INTERPRETER_CODE } },
+        });
+      },
+      error: /contradictory-target/,
+    },
+  ])("rejects the stream anomaly with $name", async ({ edit, error }) => {
+    const raw = editInterpreterStream(edit);
+    const { observation, decoded } = await replay(interpreterStream, raw);
+    expect(() =>
+      compareVertexObservation(interpreterStream, observation, decoded, "native"),
+    ).toThrow(error);
+  });
+
+  it("rejects the stream anomaly's empty text part in object mode", async () => {
+    const cell = retained[0];
+    const raw = derivative(cell, (chunks) => {
+      contentParts(chunks[0]).push({ text: "" });
+    });
+    const { observation, decoded } = await replay(cell, raw);
+    expect(() => compareVertexObservation(cell, observation, decoded, "native")).toThrow(
+      /contradictory-target/,
+    );
+  });
+
+  it("recurrence continues past the captured stream anomaly", async () => {
+    await withVertexSequence(
+      async (origin, requests) => {
+        const report = await runVertexRecurrence(localVertexEnvironment, origin);
+        expect(requests).toHaveLength(4);
+        expect(report.results[1]).toMatchObject({
+          cell: "k5-stream",
+          classification: "NOT_TRIGGERED",
+          reason: "approved-interpreter-anomaly",
+          rawHash: interpreterStream.rawHash,
+        });
+        expect(report.results.map((result) => result.classification)).toEqual([
+          "NOT_TRIGGERED",
+          "NOT_TRIGGERED",
+          "NOT_TRIGGERED",
+          "NOT_TRIGGERED",
+        ]);
+      },
+      -1,
+      undefined,
+      [retained[0], interpreterStream, ...retained.slice(2)],
+    );
   });
 });
 
@@ -1307,7 +1545,12 @@ async function runVertexRecurrence(env: VertexEnvironment, origin = VERTEX_ORIGI
           complete: observation.complete,
         };
       } catch {
-        budget.stop();
+        // A complete HTTP 200 the comparator rejected is a per-case finding: record it and keep
+        // measuring the remaining cases so one rejection does not hide them. HTTP, transport and
+        // byte-bound failures (auth, quota, outage) still stop the run before another send.
+        const rejectedOnly =
+          observation !== undefined && observation.status === 200 && observation.complete;
+        if (!rejectedOnly) budget.stop();
         results[index] = {
           ...results[index],
           classification: "FAILURE",
@@ -1321,7 +1564,7 @@ async function runVertexRecurrence(env: VertexEnvironment, origin = VERTEX_ORIGI
             observation?.error ??
             (observation?.status !== 200 ? "HTTP_FAILURE" : "WIRE_OR_SDK_REJECTED"),
         };
-        break;
+        if (!rejectedOnly) break;
       }
     }
   return {
@@ -1639,22 +1882,52 @@ describe.skipIf(!vertexLiveRequested)(
   },
 );
 
+it("Vertex recurrence still stops on a truncated HTTP 200 transport", async () => {
+  await withVertexSequence(
+    async (origin, requests) => {
+      const report = await runVertexRecurrence(localVertexEnvironment, origin);
+      expect(requests).toHaveLength(1);
+      expect(report.results[0]).toMatchObject({
+        classification: "FAILURE",
+        status: 200,
+        complete: false,
+        reason: "TRANSPORT_FAILURE",
+      });
+      expect(report.results.map((result) => result.classification)).toEqual([
+        "FAILURE",
+        "UNATTEMPTED",
+        "UNATTEMPTED",
+        "UNATTEMPTED",
+      ]);
+      expect(report.budget).toEqual({ attempts: 1, tokens: 16, blocked: true });
+    },
+    -1,
+    "cutoff",
+  );
+});
+
 it("Vertex recurring contradiction preserves actual SDK terminal and usage in failure receipt", async () => {
   await withVertexSequence(
     async (origin, requests) => {
       const report = await runVertexRecurrence(localVertexEnvironment, origin);
       console.info(JSON.stringify({ proof: "Vertex recurrence contradiction fields", report }));
-      expect(requests).toHaveLength(1);
+      // A comparator rejection of a complete HTTP 200 no longer hides the later cases.
+      expect(requests).toHaveLength(4);
       expect(report.results[0]).toMatchObject({
         classification: "FAILURE",
         sdk: "DECODED",
         terminal: "MAX_TOKENS",
         usage: { totalTokenCount: 45 },
+        reason: "WIRE_OR_SDK_REJECTED",
       });
       expect(report.results[0].chunks).toHaveLength(1);
-      expect(
-        report.results.slice(1).every((result) => result.classification === "UNATTEMPTED"),
-      ).toBe(true);
+      expect(report.results.map((result) => result.classification)).toEqual([
+        "FAILURE",
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+      ]);
+      expect(report.budget).toEqual({ attempts: 4, tokens: 160, blocked: false });
     },
     -1,
     "contradiction",
