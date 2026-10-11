@@ -50,3 +50,76 @@ export function selectCohereChatModel(models: CohereModelEntry[]): string | null
   const preferred = ["command-a-03-2025", "command-r-08-2024", "command-r7b-12-2024"];
   return preferred.find((p) => names.includes(p)) ?? names[0] ?? null;
 }
+
+/**
+ * Cohere's documented "the model generated nothing usable" error types. Live
+ * probes (2026-10-11) observed both as an HTTP 422 envelope with exactly
+ * `{error_type, id, message}`: NO_VALID_RESPONSE_GENERATED for a plain
+ * `Say hello` chat request, NO_TOOL_CALL_OR_RESPONSE_GENERATED for a
+ * `tool_choice: REQUIRED` request. The same tool-request condition also
+ * arrives mid-stream as a 200 SSE whose `message-end` carries
+ * `finish_reason: "ERROR"`, `usage: {}` and that error type.
+ */
+export const COHERE_NO_GENERATION_ERROR_TYPES = [
+  "NO_VALID_RESPONSE_GENERATED",
+  "NO_TOOL_CALL_OR_RESPONSE_GENERATED",
+] as const;
+export type CohereNoGenerationErrorType = (typeof COHERE_NO_GENERATION_ERROR_TYPES)[number];
+
+function isNoGenerationErrorType(value: unknown): value is CohereNoGenerationErrorType {
+  return (COHERE_NO_GENERATION_ERROR_TYPES as readonly unknown[]).includes(value);
+}
+
+/**
+ * Classify a live Cohere response as the exact upstream no-generation 422
+ * envelope. Returns the error type only for status 422 with a JSON body whose
+ * keys are exactly `error_type`, `id` and `message` (both strings non-empty)
+ * and whose `error_type` is one of COHERE_NO_GENERATION_ERROR_TYPES. Anything
+ * else — another status, an extra or missing key, another error type, a
+ * non-JSON body — returns null, so the caller keeps failing on it.
+ *
+ * This is upstream model nondeterminism, not envelope drift: the same request
+ * succeeds on the next send. Only the live leg may use it; the aimock leg
+ * stays strict.
+ */
+export function cohereNoGenerationError(
+  status: number,
+  body: string,
+): CohereNoGenerationErrorType | null {
+  if (status !== 422) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (keys.join(",") !== "error_type,id,message") return null;
+  if (typeof record.id !== "string" || record.id.length === 0) return null;
+  if (typeof record.message !== "string" || record.message.length === 0) return null;
+  return isNoGenerationErrorType(record.error_type) ? record.error_type : null;
+}
+
+/**
+ * Classify a live Cohere SSE `message-end` delta as the exact mid-stream
+ * no-generation terminal: keys exactly `finish_reason`, `usage`, `error`,
+ * `error_type`, with `finish_reason === "ERROR"`, `usage` an empty object,
+ * `error` a non-empty string and `error_type` NO_TOOL_CALL_OR_RESPONSE_GENERATED.
+ * Returns false for every other terminal.
+ */
+export function isCohereNoGenerationStreamEnd(delta: Record<string, unknown>): boolean {
+  const keys = Object.keys(delta).sort();
+  if (keys.join(",") !== "error,error_type,finish_reason,usage") return false;
+  if (delta.finish_reason !== "ERROR") return false;
+  if (delta.error_type !== "NO_TOOL_CALL_OR_RESPONSE_GENERATED") return false;
+  if (typeof delta.error !== "string" || delta.error.length === 0) return false;
+  const usage = delta.usage;
+  return (
+    usage !== null &&
+    typeof usage === "object" &&
+    !Array.isArray(usage) &&
+    Object.keys(usage).length === 0
+  );
+}

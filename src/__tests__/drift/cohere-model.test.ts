@@ -8,7 +8,14 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { isInfraStatus, selectCohereChatModel, type CohereModelEntry } from "./cohere-model.js";
+import { readFileSync } from "node:fs";
+import {
+  cohereNoGenerationError,
+  isCohereNoGenerationStreamEnd,
+  isInfraStatus,
+  selectCohereChatModel,
+  type CohereModelEntry,
+} from "./cohere-model.js";
 
 describe("selectCohereChatModel", () => {
   it("never selects a deprecated model (the command-r-plus 404 regression)", () => {
@@ -57,5 +64,67 @@ describe("isInfraStatus", () => {
     for (const s of [200, 400, 404, 422]) {
       expect(isInfraStatus(s)).toBe(false);
     }
+  });
+});
+
+describe("cohereNoGenerationError", () => {
+  // Genuine live 422 body for the `Say hello` shape-leg request (2026-10-11).
+  const captured = readFileSync(
+    new URL("./fixtures/cohere-chat-no-valid-response.raw", import.meta.url),
+    "utf8",
+  );
+  const body = JSON.parse(captured) as Record<string, unknown>;
+
+  it("recognizes the genuine captured 422 no-generation envelope", () => {
+    expect(cohereNoGenerationError(422, captured)).toBe("NO_VALID_RESPONSE_GENERATED");
+    expect(
+      cohereNoGenerationError(
+        422,
+        JSON.stringify({ ...body, error_type: "NO_TOOL_CALL_OR_RESPONSE_GENERATED" }),
+      ),
+    ).toBe("NO_TOOL_CALL_OR_RESPONSE_GENERATED");
+  });
+
+  it("rejects every other status, shape or error type", () => {
+    expect(cohereNoGenerationError(200, captured)).toBeNull();
+    expect(cohereNoGenerationError(400, captured)).toBeNull();
+    expect(cohereNoGenerationError(422, "not json")).toBeNull();
+    expect(cohereNoGenerationError(422, "[]")).toBeNull();
+    expect(
+      cohereNoGenerationError(422, JSON.stringify({ ...body, error_type: "OTHER" })),
+    ).toBeNull();
+    expect(cohereNoGenerationError(422, JSON.stringify({ ...body, id: "" }))).toBeNull();
+    expect(cohereNoGenerationError(422, JSON.stringify({ ...body, message: "" }))).toBeNull();
+    expect(cohereNoGenerationError(422, JSON.stringify({ ...body, extra: 1 }))).toBeNull();
+    const missing = { ...body };
+    delete missing.id;
+    expect(cohereNoGenerationError(422, JSON.stringify(missing))).toBeNull();
+  });
+});
+
+describe("isCohereNoGenerationStreamEnd", () => {
+  const end = {
+    finish_reason: "ERROR",
+    usage: {},
+    error: "No tool calls or response was generated. Try updating messages or tool definitions",
+    error_type: "NO_TOOL_CALL_OR_RESPONSE_GENERATED",
+  };
+
+  it("recognizes the exact observed mid-stream terminal", () => {
+    expect(isCohereNoGenerationStreamEnd(end)).toBe(true);
+  });
+
+  it("rejects any deviation", () => {
+    for (const mutant of [
+      { ...end, finish_reason: "COMPLETE" },
+      { ...end, usage: { tokens: {} } },
+      { ...end, usage: [] },
+      { ...end, usage: null },
+      { ...end, error: "" },
+      { ...end, error_type: "NO_VALID_RESPONSE_GENERATED" },
+      { ...end, extra: 1 },
+      { finish_reason: "ERROR", usage: {}, error_type: end.error_type },
+    ])
+      expect(isCohereNoGenerationStreamEnd(mutant), JSON.stringify(mutant)).toBe(false);
   });
 });
