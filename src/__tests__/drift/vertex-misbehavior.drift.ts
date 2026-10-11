@@ -168,8 +168,9 @@ function compareVertexObservation(
     );
     if (candidate.finishMessage !== undefined)
       assert(typeof candidate.finishMessage === "string", "invalid finish message");
-    // Native object-mode malformed-function terminals may carry `content: {}` (no keys) instead
-    // of omitting content; treat exactly that as absent. Any other content stays strict.
+    // Native malformed-function terminals may carry `content: {}` (no keys) instead of omitting
+    // content; treat exactly that as absent. Object and stream modes are both covered on purpose:
+    // empty content means no content in either mode. Any other content stays strict.
     const emptyMalformedContent =
       origin === "native" &&
       candidate.finishReason === "MALFORMED_FUNCTION_CALL" &&
@@ -433,7 +434,8 @@ describe("Vertex native malformed-function terminal with empty content", () => {
 
   it.each<{ name: string; content: JsonObject }>([
     { name: "non-model role", content: { role: "user" } },
-    { name: "non-array parts", content: { parts: "x" } },
+    { name: "non-array parts", content: { role: "model", parts: "x" } },
+    { name: "missing parts", content: { role: "model" } },
   ])("rejects malformed-function content with $name", async ({ content }) => {
     const raw = editMalformedEmptyContent((candidate) => {
       candidate.content = content;
@@ -452,6 +454,26 @@ describe("Vertex native malformed-function terminal with empty content", () => {
     expect(() =>
       compareVertexObservation(malformedEmptyContent, observation, decoded, "native"),
     ).toThrow(/invalid content/);
+  });
+
+  it("rejects the captured malformed-function terminal without a finish message", async () => {
+    const raw = editMalformedEmptyContent((candidate) => {
+      delete candidate.finishMessage;
+    });
+    const { observation, decoded } = await replay(malformedEmptyContent, raw);
+    expect(() =>
+      compareVertexObservation(malformedEmptyContent, observation, decoded, "native"),
+    ).toThrow(/invalid malformed-function terminal/);
+  });
+
+  it("accepts empty content with a malformed-function terminal in stream mode", async () => {
+    const cell: RetainedCase = { ...malformedEmptyContent, id: "k5-stream", stream: true };
+    const raw = `data: ${editMalformedEmptyContent(() => {})}\r\n\r\n`;
+    const { observation, decoded } = await replay(cell, raw);
+    const result = compareVertexObservation(cell, observation, decoded, "native");
+    expect(result.classification).toBe("NOT_TRIGGERED");
+    expect(result.reason).toBe("malformed-function-terminal");
+    expect(result.chunks).toHaveLength(1);
   });
 });
 
@@ -1313,6 +1335,7 @@ async function withVertexSequence(
   run: (origin: string, requests: { path: string; body: string }[]) => Promise<void>,
   failAt = -1,
   transportFault?: "redirect" | "cutoff" | "overflow" | "stall" | "contradiction",
+  cells: RetainedCase[] = retained,
 ) {
   const requests: { path: string; body: string }[] = [];
   const server = createServer(async (req, res) => {
@@ -1320,7 +1343,7 @@ async function withVertexSequence(
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const index = requests.length;
     requests.push({ path: req.url ?? "", body: Buffer.concat(chunks).toString("utf8") });
-    const cell = retained[index % retained.length];
+    const cell = cells[index % cells.length];
     let raw = Buffer.from(cell.raw);
     if (transportFault === "contradiction")
       raw = Buffer.from(cell.raw.replace("google:python_interpreter", "unapproved_interpreter"));
@@ -1635,5 +1658,32 @@ it("Vertex recurring contradiction preserves actual SDK terminal and usage in fa
     },
     -1,
     "contradiction",
+  );
+});
+
+it("Vertex recurrence continues past the captured empty-content malformed-function terminal", async () => {
+  await withVertexSequence(
+    async (origin, requests) => {
+      const report = await runVertexRecurrence(localVertexEnvironment, origin);
+      console.info(JSON.stringify({ proof: "Vertex recurrence empty-content malformed", report }));
+      expect(requests).toHaveLength(4);
+      expect(report.results[0]).toMatchObject({
+        cell: "k5-object",
+        classification: "NOT_TRIGGERED",
+        reason: "malformed-function-terminal",
+        terminal: "MALFORMED_FUNCTION_CALL",
+        rawHash: malformedEmptyContent.rawHash,
+      });
+      expect(report.results.map((result) => result.classification)).toEqual([
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+      ]);
+      expect(report.results.some((result) => result.reason === "earlier-case-failed")).toBe(false);
+    },
+    -1,
+    undefined,
+    [malformedEmptyContent, ...retained.slice(1)],
   );
 });
