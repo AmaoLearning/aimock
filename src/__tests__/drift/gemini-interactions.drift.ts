@@ -756,8 +756,10 @@ describe("Gemini Interactions derived segmentation contracts", () => {
   );
 });
 
-// Same contract on the recurring live-key path. No retry or empty-result acceptance.
-// These requests are intentionally bounded; a changed trigger is a drift failure.
+// Same contract on the recurring live-key path, with no retries. Native accepts
+// exactly two upstream variants: a K5 HTTP 400 "malformed_tool_call" (see
+// isMalformedToolCall) and a K9 trailing model_output step (see
+// stripTrailingAnswer). Any other changed trigger is a drift failure.
 describe.skipIf(!GOOGLE_API_KEY)("Gemini Interactions live incomplete contracts", () => {
   it.each(incompleteCaptures)("$name matches native and localhost", async (capture) => {
     const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
