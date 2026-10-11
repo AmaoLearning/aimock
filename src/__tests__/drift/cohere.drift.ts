@@ -16,14 +16,14 @@ import { CohereClientV2, CohereError, type Cohere } from "cohere-ai";
 import { withFaultFixture } from "../helpers/misbehavior-server.js";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { ServerInstance } from "../../server.js";
-import { extractShape, triangulate, formatDriftReport } from "./schema.js";
 import {
-  httpPost,
-  httpPostRaw,
-  parseDataOnlySSE,
-  startDriftServer,
-  stopDriftServer,
-} from "./helpers.js";
+  extractShape,
+  triangulate,
+  compareSSESequences,
+  formatDriftReport,
+  type SSEEventShape,
+} from "./schema.js";
+import { httpPost, httpPostRaw, startDriftServer, stopDriftServer } from "./helpers.js";
 import {
   COHERE_BASE_URL,
   COHERE_K5_NO_GENERATION,
@@ -86,17 +86,81 @@ function cohereChatResponseShape() {
 }
 
 /**
- * Minimal Cohere /v2/chat streaming chunk shape.
+ * Minimal Cohere /v2/chat streaming event shapes, one per text-stream event type.
  */
-function cohereChatStreamChunkShape() {
-  return extractShape({
-    id: "chat-abc123",
-    type: "content-delta",
-    delta: {
-      message: {
-        content: { text: "Hel" },
+function cohereChatStreamEventShapes(): SSEEventShape[] {
+  const events: { type: string; data: object }[] = [
+    {
+      type: "message-start",
+      data: {
+        id: "chat-abc123",
+        type: "message-start",
+        delta: {
+          message: { role: "assistant", content: [], tool_plan: "", tool_calls: [], citations: [] },
+        },
       },
     },
+    {
+      type: "content-start",
+      data: {
+        type: "content-start",
+        index: 0,
+        delta: { message: { content: { type: "text" } } },
+      },
+    },
+    {
+      type: "content-delta",
+      data: {
+        type: "content-delta",
+        index: 0,
+        delta: { message: { content: { text: "Hel" } } },
+      },
+    },
+    { type: "content-end", data: { type: "content-end", index: 0 } },
+    {
+      type: "message-end",
+      data: {
+        type: "message-end",
+        delta: {
+          finish_reason: "COMPLETE",
+          usage: {
+            billed_units: { input_tokens: 10, output_tokens: 5 },
+            tokens: { input_tokens: 10, output_tokens: 5 },
+          },
+        },
+      },
+    },
+  ];
+  return events.map((e) => ({ type: e.type, dataShape: extractShape(e.data) }));
+}
+
+/**
+ * Parse a Cohere v2 SSE body. Every frame is `event: <type>` + `data: <json>`
+ * whose JSON `type` equals the event name; a final `data: [DONE]` sentinel is
+ * allowed and dropped. Any other frame throws, so a framing change is loud
+ * instead of silently parsing to an empty list.
+ */
+function parseCohereSSE(body: string): { type: string; data: Record<string, unknown> }[] {
+  const frames = body
+    .replace(/\r\n/g, "\n")
+    .split("\n\n")
+    .filter((frame) => frame.trim() !== "");
+  if (frames.at(-1) === "data: [DONE]") frames.pop();
+  return frames.map((frame) => {
+    const lines = frame.split("\n");
+    if (lines.length !== 2 || !lines[0].startsWith("event: ") || !lines[1].startsWith("data: ")) {
+      throw new Error(`Unsupported Cohere SSE frame: ${JSON.stringify(frame)}`);
+    }
+    const type = lines[0].slice("event: ".length);
+    const data: unknown = JSON.parse(lines[1].slice("data: ".length));
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error(`Cohere SSE data is not an object: ${JSON.stringify(frame)}`);
+    }
+    const record = data as Record<string, unknown>;
+    if (record.type !== type) {
+      throw new Error(`Cohere SSE event name ${type} != data.type ${String(record.type)}`);
+    }
+    return { type, data: record };
   });
 }
 
@@ -382,7 +446,6 @@ describe.skipIf(!HAS_CREDENTIALS)("Cohere drift", () => {
     }
     const model = resolved.model;
 
-    const sdkChunkShape = cohereChatStreamChunkShape();
     const messages = [{ role: "user", content: "Say hello" }];
 
     const [realRes, mockRes] = await Promise.all([
@@ -413,59 +476,92 @@ describe.skipIf(!HAS_CREDENTIALS)("Cohere drift", () => {
     }
 
     expect(realRes.status).toBe(200);
-    expect(mockRes.status).toBeLessThan(500);
+    expect(mockRes.status).toBe(200);
 
-    if (mockRes.status === 200) {
-      // Parse SSE chunks from both responses
-      const realChunks = parseDataOnlySSE(realRes.body);
-      const mockChunks = parseDataOnlySSE(mockRes.body);
+    const realEvents = parseCohereSSE(realRes.body);
+    const mockEvents = parseCohereSSE(mockRes.body);
+    expect(realEvents.length, "Real API returned no SSE events").toBeGreaterThan(0);
+    expect(mockEvents.length, "Mock returned no SSE events").toBeGreaterThan(0);
 
-      if (realChunks.length > 0 && mockChunks.length > 0) {
-        // Compare first chunk shape (content-delta)
-        const realChunkShape = extractShape(realChunks[0]);
-        const mockChunkShape = extractShape(mockChunks[0]);
-
-        const diffs = triangulate(sdkChunkShape, realChunkShape, mockChunkShape);
-        const report = formatDriftReport(
-          "Cohere /v2/chat (streaming first chunk)",
-          diffs,
-          "cohere-chat",
-        );
-
-        expect(
-          diffs.filter((d) => d.severity === "critical"),
-          report,
-        ).toEqual([]);
-
-        // Also compare the LAST chunk shape (has finish_reason, usage)
-        const sdkLastChunkShape = extractShape({
-          id: "chat-abc123",
-          type: "message-end",
-          delta: {
-            finish_reason: "COMPLETE",
-            usage: {
-              billed_units: { input_tokens: 10, output_tokens: 5 },
-              tokens: { input_tokens: 10, output_tokens: 5 },
-            },
-          },
-        });
-
-        const realLastShape = extractShape(realChunks[realChunks.length - 1]);
-        const mockLastShape = extractShape(mockChunks[mockChunks.length - 1]);
-
-        const lastDiffs = triangulate(sdkLastChunkShape, realLastShape, mockLastShape);
-        const lastReport = formatDriftReport(
-          "Cohere /v2/chat (streaming last chunk)",
-          lastDiffs,
-          "cohere-chat",
-        );
-
-        expect(
-          lastDiffs.filter((d) => d.severity === "critical"),
-          lastReport,
-        ).toEqual([]);
-      }
+    const realEnd = realEvents.at(-1);
+    if (
+      realEnd?.type === "message-end" &&
+      isCohereNoGenerationStreamEnd(
+        cohereRecord(realEnd.data.delta),
+        COHERE_SHAPE_LEG_NO_GENERATION,
+      )
+    ) {
+      // Upstream generated nothing: a 200 stream whose message-end is
+      // finish_reason ERROR with empty usage. No success terminal to compare.
+      expect(
+        realEvents.some((e) => e.type === "content-start"),
+        "content before no-generation terminal",
+      ).toBe(false);
+      ctx.skip(
+        cohereNoGenerationSkipReason([
+          { errorType: "NO_VALID_RESPONSE_GENERATED", id: cohereString(realEvents[0].data.id) },
+        ]),
+      );
+      return;
     }
+
+    for (const [side, events] of [
+      ["real", realEvents],
+      ["mock", mockEvents],
+    ] as const) {
+      expect(events[0].type, `${side} stream must open with message-start`).toBe("message-start");
+      expect(events.at(-1)?.type, `${side} stream must close with message-end`).toBe("message-end");
+    }
+
+    const diffs = compareSSESequences(
+      cohereChatStreamEventShapes(),
+      realEvents.map((e) => ({ type: e.type, dataShape: extractShape(e.data) })),
+      mockEvents.map((e) => ({ type: e.type, dataShape: extractShape(e.data) })),
+    );
+    const report = formatDriftReport("Cohere /v2/chat (streaming events)", diffs, "cohere-chat");
+
+    expect(
+      diffs.filter((d) => d.severity === "critical"),
+      report,
+    ).toEqual([]);
+  });
+});
+
+describe("parseCohereSSE", () => {
+  it("parses recorded live event: + data: frames and drops the [DONE] sentinel", async () => {
+    const body = (
+      await readFile(new URL("./fixtures/cohere-k5-stream.sse", import.meta.url))
+    ).toString();
+    const events = parseCohereSSE(body);
+    expect(events.length).toBeGreaterThan(2);
+    expect(events[0].type).toBe("message-start");
+    expect(events.at(-1)?.type).toBe("message-end");
+    for (const e of events) expect(e.data.type).toBe(e.type);
+  });
+
+  it("parses aimock's stream as a non-empty event list", async () => {
+    const res = await httpPost(`${instance.url}/v2/chat`, {
+      model: "command-a-03-2025",
+      messages: [{ role: "user", content: "Say hello" }],
+      stream: true,
+    });
+    expect(res.status).toBe(200);
+    const events = parseCohereSSE(res.body);
+    expect(events.map((e) => e.type)).toEqual([
+      "message-start",
+      "content-start",
+      "content-delta",
+      "content-end",
+      "message-end",
+    ]);
+  });
+
+  it("rejects frames it does not understand instead of dropping them", () => {
+    expect(() => parseCohereSSE('data: {"type":"message-start"}\n\n')).toThrow(/Unsupported/);
+    expect(() => parseCohereSSE('event: content-end\ndata: {"type":"content-start"}\n\n')).toThrow(
+      /event name/,
+    );
+    expect(() => parseCohereSSE("event: content-end\ndata: [1]\n\n")).toThrow(/not an object/);
   });
 });
 
@@ -954,7 +1050,7 @@ function readCohereK5(
       }
     }
     const delta = cohereRecord(events.at(-1)?.delta);
-    if (options.live && isCohereNoGenerationStreamEnd(delta)) {
+    if (options.live && isCohereNoGenerationStreamEnd(delta, COHERE_K5_NO_GENERATION)) {
       assert.equal(calls.length, 0, "tool before no-generation terminal");
       assert.equal(contentCount, 0, "content before no-generation terminal");
       return {
