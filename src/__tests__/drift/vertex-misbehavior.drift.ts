@@ -168,7 +168,15 @@ function compareVertexObservation(
     );
     if (candidate.finishMessage !== undefined)
       assert(typeof candidate.finishMessage === "string", "invalid finish message");
-    if (candidate.content !== undefined) {
+    // Native malformed-function terminals may carry `content: {}` (no keys) instead of omitting
+    // content; treat exactly that as absent. Object and stream modes are both covered on purpose:
+    // empty content means no content in either mode. Any other content stays strict.
+    const emptyMalformedContent =
+      origin === "native" &&
+      candidate.finishReason === "MALFORMED_FUNCTION_CALL" &&
+      isObject(candidate.content) &&
+      Object.keys(candidate.content).length === 0;
+    if (candidate.content !== undefined && !emptyMalformedContent) {
       assert(
         isObject(candidate.content) &&
           candidate.content.role === "model" &&
@@ -386,6 +394,86 @@ describe("Vertex retained native dispositions (offline SDK/HTTP replay)", () => 
     );
     expect(result.rawHash).toBe(cell.rawHash);
     console.info(JSON.stringify(result));
+  });
+});
+
+// Byte-exact native k5-object capture from Drift Tests run 38104122278 (2026-10-11): in object
+// mode Vertex served the malformed-function terminal with an empty `content: {}` object instead of
+// omitting content (as the retained k5-stream capture does). Response-only; no request headers.
+const malformedEmptyContent: RetainedCase = {
+  id: "k5-object",
+  stream: false,
+  raw: '{\n  "candidates": [\n    {\n      "content": {},\n      "finishReason": "MALFORMED_FUNCTION_CALL",\n      "finishMessage": "Malformed function call: print(default_api.archive(cities=[\'Tokyo"\n    }\n  ],\n  "usageMetadata": {\n    "promptTokenCount": 34,\n    "totalTokenCount": 34,\n    "trafficType": "ON_DEMAND",\n    "promptTokensDetails": [\n      {\n        "modality": "TEXT",\n        "tokenCount": 34\n      }\n    ]\n  },\n  "modelVersion": "gemini-2.5-flash",\n  "createTime": "2026-10-11T02:08:24.591372Z",\n  "responseId": "mO_KaoyMJNLygLUPqbWDoAs"\n}\n',
+  rawHash: "4c38ba91587ac63d5cdf2c25209743d1670fd67dc01b53b2b6d93aa0948477eb",
+  requestHash: "9a2018221c7e7d8776e40ea38a631585b00e705349d81052d98621d0bc1f3fba",
+};
+function editMalformedEmptyContent(edit: (candidate: JsonObject) => void) {
+  const chunk = parseJson(malformedEmptyContent.raw);
+  assert(isObject(chunk) && Array.isArray(chunk.candidates) && isObject(chunk.candidates[0]));
+  edit(chunk.candidates[0]);
+  return JSON.stringify(chunk);
+}
+
+describe("Vertex native malformed-function terminal with empty content", () => {
+  it("classifies the captured empty-content object as an approved non-trigger", async () => {
+    expect(sha256(malformedEmptyContent.raw)).toBe(malformedEmptyContent.rawHash);
+    const { observation, decoded } = await replay(malformedEmptyContent);
+    const result = compareVertexObservation(malformedEmptyContent, observation, decoded, "native");
+    expect(result.classification).toBe("NOT_TRIGGERED");
+    expect(result.reason).toBe("malformed-function-terminal");
+    expect(result.terminal).toBe("MALFORMED_FUNCTION_CALL");
+    expect(result.rawHash).toBe(malformedEmptyContent.rawHash);
+  });
+
+  it("rejects the same empty content on the modeled leg", async () => {
+    const { observation, decoded } = await replay(malformedEmptyContent);
+    expect(() =>
+      compareVertexObservation(malformedEmptyContent, observation, decoded, "modeled"),
+    ).toThrow(/invalid content/);
+  });
+
+  it.each<{ name: string; content: JsonObject }>([
+    { name: "non-model role", content: { role: "user" } },
+    { name: "non-array parts", content: { role: "model", parts: "x" } },
+    { name: "missing parts", content: { role: "model" } },
+  ])("rejects malformed-function content with $name", async ({ content }) => {
+    const raw = editMalformedEmptyContent((candidate) => {
+      candidate.content = content;
+    });
+    const { observation, decoded } = await replay(malformedEmptyContent, raw);
+    expect(() =>
+      compareVertexObservation(malformedEmptyContent, observation, decoded, "native"),
+    ).toThrow(/invalid content/);
+  });
+
+  it.each(["STOP", "MAX_TOKENS"])("rejects empty content with a %s terminal", async (reason) => {
+    const raw = editMalformedEmptyContent((candidate) => {
+      candidate.finishReason = reason;
+    });
+    const { observation, decoded } = await replay(malformedEmptyContent, raw);
+    expect(() =>
+      compareVertexObservation(malformedEmptyContent, observation, decoded, "native"),
+    ).toThrow(/invalid content/);
+  });
+
+  it("rejects the captured malformed-function terminal without a finish message", async () => {
+    const raw = editMalformedEmptyContent((candidate) => {
+      delete candidate.finishMessage;
+    });
+    const { observation, decoded } = await replay(malformedEmptyContent, raw);
+    expect(() =>
+      compareVertexObservation(malformedEmptyContent, observation, decoded, "native"),
+    ).toThrow(/invalid malformed-function terminal/);
+  });
+
+  it("accepts empty content with a malformed-function terminal in stream mode", async () => {
+    const cell: RetainedCase = { ...malformedEmptyContent, id: "k5-stream", stream: true };
+    const raw = `data: ${editMalformedEmptyContent(() => {})}\r\n\r\n`;
+    const { observation, decoded } = await replay(cell, raw);
+    const result = compareVertexObservation(cell, observation, decoded, "native");
+    expect(result.classification).toBe("NOT_TRIGGERED");
+    expect(result.reason).toBe("malformed-function-terminal");
+    expect(result.chunks).toHaveLength(1);
   });
 });
 
@@ -1247,6 +1335,7 @@ async function withVertexSequence(
   run: (origin: string, requests: { path: string; body: string }[]) => Promise<void>,
   failAt = -1,
   transportFault?: "redirect" | "cutoff" | "overflow" | "stall" | "contradiction",
+  cells: RetainedCase[] = retained,
 ) {
   const requests: { path: string; body: string }[] = [];
   const server = createServer(async (req, res) => {
@@ -1254,7 +1343,7 @@ async function withVertexSequence(
     for await (const chunk of req) chunks.push(Buffer.from(chunk));
     const index = requests.length;
     requests.push({ path: req.url ?? "", body: Buffer.concat(chunks).toString("utf8") });
-    const cell = retained[index % retained.length];
+    const cell = cells[index % cells.length];
     let raw = Buffer.from(cell.raw);
     if (transportFault === "contradiction")
       raw = Buffer.from(cell.raw.replace("google:python_interpreter", "unapproved_interpreter"));
@@ -1569,5 +1658,32 @@ it("Vertex recurring contradiction preserves actual SDK terminal and usage in fa
     },
     -1,
     "contradiction",
+  );
+});
+
+it("Vertex recurrence continues past the captured empty-content malformed-function terminal", async () => {
+  await withVertexSequence(
+    async (origin, requests) => {
+      const report = await runVertexRecurrence(localVertexEnvironment, origin);
+      console.info(JSON.stringify({ proof: "Vertex recurrence empty-content malformed", report }));
+      expect(requests).toHaveLength(4);
+      expect(report.results[0]).toMatchObject({
+        cell: "k5-object",
+        classification: "NOT_TRIGGERED",
+        reason: "malformed-function-terminal",
+        terminal: "MALFORMED_FUNCTION_CALL",
+        rawHash: malformedEmptyContent.rawHash,
+      });
+      expect(report.results.map((result) => result.classification)).toEqual([
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+        "NOT_TRIGGERED",
+      ]);
+      expect(report.results.some((result) => result.reason === "earlier-case-failed")).toBe(false);
+    },
+    -1,
+    undefined,
+    [malformedEmptyContent, ...retained.slice(1)],
   );
 });
