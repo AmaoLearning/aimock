@@ -131,14 +131,22 @@ export function cohereNoGenerationSkipReason(outcomes: CohereNoGeneration[]): st
  * Classify a live Cohere SSE `message-end` delta as the exact mid-stream
  * no-generation terminal: keys exactly `finish_reason`, `usage`, `error`,
  * `error_type`, with `finish_reason === "ERROR"`, `usage` an empty object,
- * `error` a non-empty string and `error_type` NO_TOOL_CALL_OR_RESPONSE_GENERATED.
- * Returns false for every other terminal.
+ * `error` a non-empty string and `error_type` in `allowed`. Returns false for
+ * every other terminal.
+ *
+ * As with `cohereNoGenerationError`, `allowed` names only the codes the
+ * request can produce (K5 passes `COHERE_K5_NO_GENERATION`, the no-tools
+ * shape legs pass `COHERE_SHAPE_LEG_NO_GENERATION`).
  */
-export function isCohereNoGenerationStreamEnd(delta: Record<string, unknown>): boolean {
+export function isCohereNoGenerationStreamEnd(
+  delta: Record<string, unknown>,
+  allowed: readonly CohereNoGenerationErrorType[],
+): boolean {
   const keys = Object.keys(delta).sort();
   if (keys.join(",") !== "error,error_type,finish_reason,usage") return false;
   if (delta.finish_reason !== "ERROR") return false;
-  if (delta.error_type !== "NO_TOOL_CALL_OR_RESPONSE_GENERATED") return false;
+  if (!isNoGenerationErrorType(delta.error_type)) return false;
+  if (!allowed.includes(delta.error_type)) return false;
   if (typeof delta.error !== "string" || delta.error.length === 0) return false;
   const usage = delta.usage;
   return (

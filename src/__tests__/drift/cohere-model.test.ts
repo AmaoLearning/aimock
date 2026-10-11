@@ -143,7 +143,15 @@ describe("isCohereNoGenerationStreamEnd", () => {
   };
 
   it("recognizes the exact observed mid-stream terminal", () => {
-    expect(isCohereNoGenerationStreamEnd(end)).toBe(true);
+    expect(isCohereNoGenerationStreamEnd(end, COHERE_K5_NO_GENERATION)).toBe(true);
+  });
+
+  it("accepts only the error types the caller allows", () => {
+    // CONSTRUCTED: the no-tools shape leg's mid-stream terminal would carry
+    // NO_VALID_RESPONSE_GENERATED; that terminal has not been observed live.
+    const noValid = { ...end, error_type: "NO_VALID_RESPONSE_GENERATED" };
+    expect(isCohereNoGenerationStreamEnd(noValid, COHERE_SHAPE_LEG_NO_GENERATION)).toBe(true);
+    expect(isCohereNoGenerationStreamEnd(end, COHERE_SHAPE_LEG_NO_GENERATION)).toBe(false);
   });
 
   it("rejects any deviation", () => {
@@ -158,6 +166,9 @@ describe("isCohereNoGenerationStreamEnd", () => {
       { ...end, extra: 1 },
       { finish_reason: "ERROR", usage: {}, error_type: end.error_type },
     ])
-      expect(isCohereNoGenerationStreamEnd(mutant), JSON.stringify(mutant)).toBe(false);
+      expect(
+        isCohereNoGenerationStreamEnd(mutant, COHERE_K5_NO_GENERATION),
+        JSON.stringify(mutant),
+      ).toBe(false);
   });
 });

@@ -16,14 +16,14 @@ import { CohereClientV2, CohereError, type Cohere } from "cohere-ai";
 import { withFaultFixture } from "../helpers/misbehavior-server.js";
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { ServerInstance } from "../../server.js";
-import { extractShape, triangulate, formatDriftReport } from "./schema.js";
 import {
-  httpPost,
-  httpPostRaw,
-  parseDataOnlySSE,
-  startDriftServer,
-  stopDriftServer,
-} from "./helpers.js";
+  extractShape,
+  triangulate,
+  compareSSESequences,
+  formatDriftReport,
+  type SSEEventShape,
+} from "./schema.js";
+import { httpPost, httpPostRaw, startDriftServer, stopDriftServer } from "./helpers.js";
 import {
   COHERE_BASE_URL,
   COHERE_K5_NO_GENERATION,
@@ -86,18 +86,116 @@ function cohereChatResponseShape() {
 }
 
 /**
- * Minimal Cohere /v2/chat streaming chunk shape.
+ * Minimal Cohere /v2/chat streaming event shapes, one per text-stream event type.
  */
-function cohereChatStreamChunkShape() {
-  return extractShape({
-    id: "chat-abc123",
-    type: "content-delta",
-    delta: {
-      message: {
-        content: { text: "Hel" },
+function cohereChatStreamEventShapes(): SSEEventShape[] {
+  const events: { type: string; data: object }[] = [
+    {
+      type: "message-start",
+      data: {
+        id: "chat-abc123",
+        type: "message-start",
+        delta: {
+          message: { role: "assistant", content: [], tool_plan: "", tool_calls: [], citations: [] },
+        },
       },
     },
-  });
+    {
+      type: "content-start",
+      data: {
+        type: "content-start",
+        index: 0,
+        delta: { message: { content: { type: "text" } } },
+      },
+    },
+    {
+      type: "content-delta",
+      data: {
+        type: "content-delta",
+        index: 0,
+        delta: { message: { content: { text: "Hel" } } },
+      },
+    },
+    { type: "content-end", data: { type: "content-end", index: 0 } },
+    {
+      type: "message-end",
+      data: {
+        type: "message-end",
+        delta: {
+          finish_reason: "COMPLETE",
+          usage: {
+            billed_units: { input_tokens: 10, output_tokens: 5 },
+            tokens: { input_tokens: 10, output_tokens: 5 },
+          },
+        },
+      },
+    },
+  ];
+  return events.map((e) => ({ type: e.type, dataShape: extractShape(e.data) }));
+}
+
+/**
+ * Parse a Cohere v2 SSE body by the SSE spec (WHATWG event-stream): lines end
+ * in `\n`, `\r\n` or `\r`; a blank line dispatches the event; `:` lines are
+ * comments; one space after the field colon is optional; `id`/`retry` and
+ * unknown fields are ignored; multiple `data` lines join with `\n`; a final
+ * event without a blank line is still dispatched. A `data: [DONE]` sentinel
+ * with no event name ends the stream and is dropped.
+ *
+ * Still strict on content: each event's data must be a JSON object whose
+ * `type` equals the event name (an event without `event:` is named `message`
+ * by the spec, so it fails that check), and nothing may follow `[DONE]`.
+ */
+function parseCohereSSE(body: string): { type: string; data: Record<string, unknown> }[] {
+  const events: { type: string; data: Record<string, unknown> }[] = [];
+  let eventName = "";
+  let dataLines: string[] = [];
+  let done = false;
+
+  const dispatch = () => {
+    const name = eventName || "message";
+    const hadData = dataLines.length > 0;
+    const raw = dataLines.join("\n");
+    eventName = "";
+    dataLines = [];
+    if (!hadData) return;
+    if (done) throw new Error(`Cohere SSE event after [DONE]: ${JSON.stringify(raw)}`);
+    if (name === "message" && raw === "[DONE]") {
+      done = true;
+      return;
+    }
+    let data: unknown;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      throw new Error(`Cohere SSE data is not JSON: ${JSON.stringify(raw)}`);
+    }
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error(`Cohere SSE data is not an object: ${JSON.stringify(raw)}`);
+    }
+    const record = data as Record<string, unknown>;
+    if (record.type !== name) {
+      throw new Error(`Cohere SSE event name ${name} != data.type ${String(record.type)}`);
+    }
+    events.push({ type: name, data: record });
+  };
+
+  for (const line of body.split(/\r\n|\r|\n/)) {
+    if (line === "") {
+      dispatch();
+      continue;
+    }
+    if (line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon === -1 ? line : line.slice(0, colon);
+    let value = colon === -1 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") eventName = value;
+    else if (field === "data") dataLines.push(value);
+    // id, retry and unknown fields are ignored per the SSE spec.
+  }
+  dispatch();
+  return events;
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +480,6 @@ describe.skipIf(!HAS_CREDENTIALS)("Cohere drift", () => {
     }
     const model = resolved.model;
 
-    const sdkChunkShape = cohereChatStreamChunkShape();
     const messages = [{ role: "user", content: "Say hello" }];
 
     const [realRes, mockRes] = await Promise.all([
@@ -413,59 +510,121 @@ describe.skipIf(!HAS_CREDENTIALS)("Cohere drift", () => {
     }
 
     expect(realRes.status).toBe(200);
-    expect(mockRes.status).toBeLessThan(500);
+    expect(mockRes.status).toBe(200);
 
-    if (mockRes.status === 200) {
-      // Parse SSE chunks from both responses
-      const realChunks = parseDataOnlySSE(realRes.body);
-      const mockChunks = parseDataOnlySSE(mockRes.body);
+    const realEvents = parseCohereSSE(realRes.body);
+    const mockEvents = parseCohereSSE(mockRes.body);
+    expect(realEvents.length, "Real API returned no SSE events").toBeGreaterThan(0);
+    expect(mockEvents.length, "Mock returned no SSE events").toBeGreaterThan(0);
 
-      if (realChunks.length > 0 && mockChunks.length > 0) {
-        // Compare first chunk shape (content-delta)
-        const realChunkShape = extractShape(realChunks[0]);
-        const mockChunkShape = extractShape(mockChunks[0]);
-
-        const diffs = triangulate(sdkChunkShape, realChunkShape, mockChunkShape);
-        const report = formatDriftReport(
-          "Cohere /v2/chat (streaming first chunk)",
-          diffs,
-          "cohere-chat",
-        );
-
-        expect(
-          diffs.filter((d) => d.severity === "critical"),
-          report,
-        ).toEqual([]);
-
-        // Also compare the LAST chunk shape (has finish_reason, usage)
-        const sdkLastChunkShape = extractShape({
-          id: "chat-abc123",
-          type: "message-end",
-          delta: {
-            finish_reason: "COMPLETE",
-            usage: {
-              billed_units: { input_tokens: 10, output_tokens: 5 },
-              tokens: { input_tokens: 10, output_tokens: 5 },
-            },
-          },
-        });
-
-        const realLastShape = extractShape(realChunks[realChunks.length - 1]);
-        const mockLastShape = extractShape(mockChunks[mockChunks.length - 1]);
-
-        const lastDiffs = triangulate(sdkLastChunkShape, realLastShape, mockLastShape);
-        const lastReport = formatDriftReport(
-          "Cohere /v2/chat (streaming last chunk)",
-          lastDiffs,
-          "cohere-chat",
-        );
-
-        expect(
-          lastDiffs.filter((d) => d.severity === "critical"),
-          lastReport,
-        ).toEqual([]);
-      }
+    const realEnd = realEvents.at(-1);
+    if (
+      realEnd?.type === "message-end" &&
+      isCohereNoGenerationStreamEnd(
+        cohereRecord(realEnd.data.delta),
+        COHERE_SHAPE_LEG_NO_GENERATION,
+      )
+    ) {
+      // Upstream generated nothing: a 200 stream whose message-end is
+      // finish_reason ERROR with empty usage. No success terminal to compare.
+      expect(
+        realEvents.some((e) => e.type === "content-start"),
+        "content before no-generation terminal",
+      ).toBe(false);
+      ctx.skip(
+        cohereNoGenerationSkipReason([
+          { errorType: "NO_VALID_RESPONSE_GENERATED", id: cohereString(realEvents[0].data.id) },
+        ]),
+      );
+      return;
     }
+
+    for (const [side, events] of [
+      ["real", realEvents],
+      ["mock", mockEvents],
+    ] as const) {
+      expect(events[0].type, `${side} stream must open with message-start`).toBe("message-start");
+      expect(events.at(-1)?.type, `${side} stream must close with message-end`).toBe("message-end");
+    }
+
+    const diffs = compareSSESequences(
+      cohereChatStreamEventShapes(),
+      realEvents.map((e) => ({ type: e.type, dataShape: extractShape(e.data) })),
+      mockEvents.map((e) => ({ type: e.type, dataShape: extractShape(e.data) })),
+    );
+    const report = formatDriftReport("Cohere /v2/chat (streaming events)", diffs, "cohere-chat");
+
+    expect(
+      diffs.filter((d) => d.severity === "critical"),
+      report,
+    ).toEqual([]);
+  });
+});
+
+describe("parseCohereSSE", () => {
+  it("parses recorded live event: + data: frames and drops the [DONE] sentinel", async () => {
+    const body = (
+      await readFile(new URL("./fixtures/cohere-k5-stream.sse", import.meta.url))
+    ).toString();
+    const events = parseCohereSSE(body);
+    expect(events.length).toBeGreaterThan(2);
+    expect(events[0].type).toBe("message-start");
+    expect(events.at(-1)?.type).toBe("message-end");
+    for (const e of events) expect(e.data.type).toBe(e.type);
+  });
+
+  it("parses aimock's stream as a non-empty event list", async () => {
+    const res = await httpPost(`${instance.url}/v2/chat`, {
+      model: "command-a-03-2025",
+      messages: [{ role: "user", content: "Say hello" }],
+      stream: true,
+    });
+    expect(res.status).toBe(200);
+    const events = parseCohereSSE(res.body);
+    expect(events.map((e) => e.type)).toEqual([
+      "message-start",
+      "content-start",
+      "content-delta",
+      "content-end",
+      "message-end",
+    ]);
+  });
+
+  it("accepts legal SSE variants a server or proxy may send", () => {
+    const start = '{"type":"message-start","id":"x"}';
+    const end = '{"type":"message-end","delta":{}}';
+    const expected = ["message-start", "message-end"];
+    const variants: Record<string, string> = {
+      canonical: `event: message-start\ndata: ${start}\n\nevent: message-end\ndata: ${end}\n\ndata: [DONE]\n\n`,
+      "single trailing newline": `event: message-start\ndata: ${start}\n\nevent: message-end\ndata: ${end}\n`,
+      "no trailing newline": `event: message-start\ndata: ${start}\n\nevent: message-end\ndata: ${end}`,
+      "no space after colon": `event:message-start\ndata:${start}\n\nevent:message-end\ndata:${end}\n\n`,
+      "keepalive comments": `: ping\n\nevent: message-start\n:mid-frame comment\ndata: ${start}\n\n:\n\nevent: message-end\ndata: ${end}\n\n`,
+      "id and retry fields": `retry: 3000\n\nid: 1\nevent: message-start\ndata: ${start}\n\nid: 2\nevent: message-end\nretry: 10\ndata: ${end}\n\n`,
+      CRLF: `event: message-start\r\ndata: ${start}\r\n\r\nevent: message-end\r\ndata: ${end}\r\n\r\ndata: [DONE]\r\n\r\n`,
+      CR: `event: message-start\rdata: ${start}\r\revent: message-end\rdata: ${end}\r\r`,
+      "multi-line data": `event: message-start\ndata: {"type":\ndata: "message-start"}\n\nevent: message-end\ndata: ${end}\n\n`,
+    };
+    for (const [name, body] of Object.entries(variants)) {
+      expect(
+        parseCohereSSE(body).map((e) => e.type),
+        name,
+      ).toEqual(expected);
+    }
+  });
+
+  it("rejects malformed data, mismatched names and events after [DONE]", () => {
+    expect(() => parseCohereSSE("event: message-start\ndata: {not json\n\n")).toThrow(/not JSON/);
+    expect(() => parseCohereSSE("event: content-end\ndata: [1]\n\n")).toThrow(/not an object/);
+    expect(() => parseCohereSSE("event: content-end\ndata: null\n\n")).toThrow(/not an object/);
+    expect(() => parseCohereSSE('event: content-end\ndata: {"type":"content-start"}\n\n')).toThrow(
+      /event name/,
+    );
+    // No event: line -> the spec names it "message", which never matches data.type.
+    expect(() => parseCohereSSE('data: {"type":"message-start"}\n\n')).toThrow(/event name/);
+    expect(() =>
+      parseCohereSSE('data: [DONE]\n\nevent: content-end\ndata: {"type":"content-end"}\n\n'),
+    ).toThrow(/after \[DONE\]/);
   });
 });
 
@@ -954,7 +1113,7 @@ function readCohereK5(
       }
     }
     const delta = cohereRecord(events.at(-1)?.delta);
-    if (options.live && isCohereNoGenerationStreamEnd(delta)) {
+    if (options.live && isCohereNoGenerationStreamEnd(delta, COHERE_K5_NO_GENERATION)) {
       assert.equal(calls.length, 0, "tool before no-generation terminal");
       assert.equal(contentCount, 0, "content before no-generation terminal");
       return {
