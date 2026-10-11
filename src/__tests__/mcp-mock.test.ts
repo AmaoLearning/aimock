@@ -372,7 +372,25 @@ describe("MCPMock", () => {
       expect(data.result.tools[1]).toEqual({
         name: "calc",
         description: "Calculator",
+        inputSchema: { type: "object" },
       });
+    });
+
+    it("tools/list gives every tool an inputSchema, as the MCP schema requires", async () => {
+      // The official SDK clients reject the whole list when one tool lacks
+      // inputSchema. Both of these register a tool without one.
+      mcp = new MCPMock();
+      mcp.addTool({ name: "search", description: "Search the web" });
+      mcp.onToolCall("lookup", () => "x");
+      const url = await mcp.start();
+      const sessionId = await initSession(url);
+
+      const res = await jsonRpc(url, "/", "tools/list", {}, 1, { "mcp-session-id": sessionId });
+      const data = JSON.parse(res.body);
+      expect(data.result.tools).toEqual([
+        { name: "search", description: "Search the web", inputSchema: { type: "object" } },
+        { name: "lookup", inputSchema: { type: "object" } },
+      ]);
     });
 
     it("tools/call with function handler", async () => {
