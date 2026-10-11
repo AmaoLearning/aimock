@@ -504,10 +504,142 @@ function incompleteContract(raw: string, capture: IncompleteCapture) {
   };
 }
 
-async function compareLocalIncomplete(capture: IncompleteCapture, nativeRaw: string) {
+// Upstream model nondeterminism, NOT an aimock or request defect. Re-sending the
+// exact K9 request (max_output_tokens 32) to live gemini-2.5-flash on 2026-10-10
+// usually stops inside the thought, but sometimes the model writes one more
+// answer token before the cut: 3/47 object and 1/47 stream calls (plus one
+// failed local stream test run). No max_output_tokens value from 8 to 128 and no
+// thinking_level was reliable (most were worse than 32), so no request change
+// makes the trigger reliable. The live NATIVE leg therefore also accepts
+// exactly this variant: after the thought step, one trailing model_output step
+// with a single text part (1-6 output tokens on the object; in the stream, one
+// thought_signature delta closing step 0, then 1-6 text deltas in step 1). The
+// variant is validated, then removed, and the rest must pass the unchanged strict
+// thought-only contract. Captured references and localhost stay strict.
+function stripTrailingAnswer(raw: string, capture: IncompleteCapture): string {
+  expect(capture.name.startsWith("K9")).toBe(true);
+  if (!capture.request.stream) {
+    const body = nativeObject(JSON.parse(raw));
+    expect(Array.isArray(body.steps)).toBe(true);
+    const steps = body.steps as unknown[];
+    expect(steps).toHaveLength(2);
+    expect(nativeObject(steps[0]).type).toBe("thought");
+    const answer = nativeObject(steps[1]);
+    expect(answer).toEqual({
+      type: "model_output",
+      content: [{ type: "text", text: expect.any(String) }],
+    });
+    expect((answer.content as { text: string }[])[0].text).not.toBe("");
+    const usage = nativeObject(body.usage);
+    const answerTokens = usage.total_output_tokens;
+    expect(Number.isInteger(answerTokens)).toBe(true);
+    expect(answerTokens).toBeGreaterThanOrEqual(1);
+    expect(answerTokens).toBeLessThanOrEqual(6);
+    // The strict contract then requires total = input + thought on the remainder.
+    return JSON.stringify({
+      ...body,
+      steps: [steps[0]],
+      usage: {
+        ...usage,
+        total_output_tokens: 0,
+        total_tokens: Number(usage.total_tokens) - Number(answerTokens),
+      },
+    });
+  }
+  const frames = raw.split("\n\n");
+  const event = (frame: string | undefined) => {
+    expect(typeof frame).toBe("string");
+    const lines = String(frame).split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1].startsWith("data: ")).toBe(true);
+    const parsed = nativeObject(JSON.parse(lines[1].slice(6)));
+    expect(lines[0]).toBe(`event: ${String(parsed.event_type)}`);
+    return parsed;
+  };
+  const start = frames.findIndex((frame) => frame.startsWith("event: step.start\n"));
+  expect(start).toBeGreaterThan(-1);
+  const answerStart = frames.findIndex(
+    (frame, index) => index > start && frame.startsWith("event: step.start\n"),
+  );
+  expect(answerStart).toBeGreaterThan(start);
+  expect(event(frames[answerStart])).toEqual({
+    index: 1,
+    step: { type: "model_output" },
+    event_type: "step.start",
+  });
+  expect(event(frames[answerStart - 1])).toEqual({ index: 0, event_type: "step.stop" });
+  const signature = event(frames[answerStart - 2]);
+  expect(signature).toEqual({
+    index: 0,
+    delta: { type: "thought_signature", signature: expect.any(String) },
+    event_type: "step.delta",
+  });
+  expect(nativeObject(signature.delta).signature).not.toBe("");
+  let stop = answerStart + 1;
+  while (frames[stop]?.startsWith("event: step.delta\n")) {
+    const delta = event(frames[stop]);
+    expect(delta).toEqual({
+      index: 1,
+      delta: { type: "text", text: expect.any(String) },
+      event_type: "step.delta",
+    });
+    expect(nativeObject(delta.delta).text).not.toBe("");
+    stop++;
+  }
+  expect(stop - answerStart - 1).toBeGreaterThanOrEqual(1);
+  expect(stop - answerStart - 1).toBeLessThanOrEqual(6);
+  expect(event(frames[stop])).toEqual({ index: 1, event_type: "step.stop" });
+  // Drop the signature delta and the whole answer step; keep step 0's stop. The
+  // strict contract then requires interaction.completed to follow directly.
+  return [
+    ...frames.slice(0, answerStart - 2),
+    frames[answerStart - 1],
+    ...frames.slice(stop + 1),
+  ].join("\n\n");
+}
+
+function hasTrailingAnswer(raw: string, capture: IncompleteCapture): boolean {
+  return capture.name.startsWith("K9") && raw.includes('"model_output"');
+}
+
+// Upstream model nondeterminism on the live K5 object request: the model sometimes
+// writes a tool call that Google cannot parse, and Google answers 400 with code
+// "malformed_tool_call" (2/28 live calls on 2026-10-10). The body is exactly
+// {"error":{"message":<string>,"code":"malformed_tool_call"}}. Only this native
+// outcome is accepted; any other status, code or body shape still fails.
+function isMalformedToolCall(status: number, raw: string): boolean {
+  if (status !== 400) return false;
+  let body: unknown;
+  try {
+    body = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  const keys = Object.keys(body);
+  if (keys.length !== 1 || keys[0] !== "error") return false;
+  const error = (body as { error: unknown }).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return false;
+  const fields = error as Record<string, unknown>;
+  return (
+    Object.keys(fields).sort().join(",") === "code,message" &&
+    fields.code === "malformed_tool_call" &&
+    typeof fields.message === "string"
+  );
+}
+
+async function compareLocalIncomplete(
+  capture: IncompleteCapture,
+  nativeRaw: string,
+  options: { liveNative?: boolean } = {},
+) {
   expect(createHash("sha256").update(capture.raw).digest("hex")).toBe(capture.rawSha256);
   const reference = incompleteContract(capture.raw, capture);
-  expect(incompleteContract(nativeRaw, capture)).toEqual(reference);
+  const native =
+    options.liveNative && hasTrailingAnswer(nativeRaw, capture)
+      ? stripTrailingAnswer(nativeRaw, capture)
+      : nativeRaw;
+  expect(incompleteContract(native, capture)).toEqual(reference);
   const fault = capture.name.startsWith("K5")
     ? { fault: "stop-length-mid-tool", at: 0.5 }
     : { fault: "reasoning-only", reasoning: "Considering options." };
@@ -624,8 +756,10 @@ describe("Gemini Interactions derived segmentation contracts", () => {
   );
 });
 
-// Same contract on the recurring live-key path. No retry or empty-result acceptance.
-// These requests are intentionally bounded; a changed trigger is a drift failure.
+// Same contract on the recurring live-key path, with no retries. Native accepts
+// exactly two upstream variants: a K5 HTTP 400 "malformed_tool_call" (see
+// isMalformedToolCall) and a K9 trailing model_output step (see
+// stripTrailingAnswer). Any other changed trigger is a drift failure.
 describe.skipIf(!GOOGLE_API_KEY)("Gemini Interactions live incomplete contracts", () => {
   it.each(incompleteCaptures)("$name matches native and localhost", async (capture) => {
     const response = await fetch("https://generativelanguage.googleapis.com/v1beta/interactions", {
@@ -635,8 +769,153 @@ describe.skipIf(!GOOGLE_API_KEY)("Gemini Interactions live incomplete contracts"
       signal: AbortSignal.timeout(45000),
     });
     const raw = await response.text();
+    if (capture.name === "K5 object" && isMalformedToolCall(response.status, raw)) {
+      // Accepted upstream outcome (see isMalformedToolCall). There is no native
+      // body to grade, so localhost is still graded strictly against the capture.
+      console.log(JSON.stringify({ case: capture.name, native: "malformed_tool_call", raw }));
+      await compareLocalIncomplete(capture, capture.raw);
+      return;
+    }
     expect(response.status).toBe(200);
-    await compareLocalIncomplete(capture, raw);
+    await compareLocalIncomplete(capture, raw, { liveNative: true });
+  });
+});
+
+// Real native captures of the accepted upstream variants (2026-10-10, exact
+// requests above), plus mutations that must still fail. No key needed.
+// live K9 object, 2026-10-10T23:53:30Z, HTTP 200; sha256 dc895d5c6a12707206e838dbaf9da1f875d344c3b85caca75796e36dfd39cdac
+const VARIANT_K9_OBJECT =
+  '{"status":"incomplete","usage":{"total_tokens":69,"total_input_tokens":41,"input_tokens_by_modality":[{"modality":"text","tokens":41}],"total_cached_tokens":0,"total_output_tokens":2,"total_tool_use_tokens":0,"total_thought_tokens":26},"created":"2026-10-10T23:53:30Z","updated":"2026-10-10T23:53:30Z","service_tier":"standard","steps":[{"signature":"Cm4BaRR9Ez0BCMXapK5r1EUE6Oye4Ioyb5lQZhcsgANa+liaIolbjEBO4Obxg8DhTnA6ywTsDcsNc6/uvl2u96ANGimY20yuRpe9QiSfDfOW/JF9mDabD2R8EPXxmpWxSxwl0HQQkHHyCObgcLb8OQ==","summary":[{"text":"Here\'s my analysis of the problem:\\n\\n**Delving into Subset Cardinality**\\n\\nOkay, so we\'re starting with a foundational set, let\'s call it \'S\'. It\'s defined as the integers from 1 to 100, inclusive – pretty straightforward. The core of this problem, it seems, revolves around the subsets of \'S\'. Specifically, we\'re being asked to determine the count of these subsets, \'A\'. This suggests we\'re probably dealing with combinatorial principles, specifically, counting various combinations and permutations, perhaps. I need to be careful not to make assumptions about constraints; it is a general question, so all subsets are acceptable. I should now focus on establishing the tools and concepts to work with subsets in this way.\\n","type":"text"}],"type":"thought"},{"content":[{"text":"Let $","type":"text"}],"type":"model_output"}],"object":"interaction","model":"gemini-2.5-flash"}';
+// live K9 stream, 2026-10-10T23:53Z, HTTP 200; sha256 0b9e5891c95f6284eb44eaf33fe7acf3337a16e7b35c0f4f3902accd343b0c61
+const VARIANT_K9_STREAM =
+  'event: interaction.created\ndata: {"interaction":{"id":"","status":"in_progress","object":"interaction","model":"gemini-2.5-flash"},"event_type":"interaction.created"}\n\nevent: interaction.status_update\ndata: {"interaction_id":"","status":"in_progress","event_type":"interaction.status_update"}\n\nevent: step.start\ndata: {"index":0,"step":{"type":"thought"},"event_type":"step.start"}\n\nevent: step.delta\ndata: {"index":0,"delta":{"content":{"text":"**Exploring Subset Counting**\\n\\nI\'m currently focused on determining the number of subsets that meet specific criteria within the integer set S = {1, 2, ..., 100}. The initial step involves understanding the basic principles of subset formation and how to systematically approach the counting process.\\n\\n\\n","type":"text"},"type":"thought_summary"},"event_type":"step.delta"}\n\nevent: step.delta\ndata: {"index":0,"delta":{"signature":"CiQBaRR9E9E8wzh56BN4RULYVbPbyzheTnpSQ7DnEuw/4S+UX3MKTwFpFH0T7CuAk95wNS8hxubrIyycIMtUxjWvvirvi17o3te/DUMMT0zGrTMJujtwdtC33qqFSGoBFNdPBcnvViDpx1nWo9ZTKMAf81PbjqgKRAFpFH0TRUWd+gVu7pCGK1mM0xlX9m1bZ2jd2rfjkpc/DcDTSvzL41DbuG8AnVwmPzmNh8HEps2neok1FatG/LceZlBp","type":"thought_signature"},"event_type":"step.delta"}\n\nevent: step.stop\ndata: {"index":0,"event_type":"step.stop"}\n\nevent: step.start\ndata: {"index":1,"step":{"type":"model_output"},"event_type":"step.start"}\n\nevent: step.delta\ndata: {"index":1,"delta":{"text":"Let","type":"text"},"event_type":"step.delta"}\n\nevent: step.stop\ndata: {"index":1,"event_type":"step.stop"}\n\nevent: interaction.completed\ndata: {"interaction":{"id":"","status":"incomplete","usage":{"total_tokens":68,"total_input_tokens":41,"input_tokens_by_modality":[{"modality":"text","tokens":41}],"total_cached_tokens":0,"total_output_tokens":0,"total_tool_use_tokens":0,"total_thought_tokens":27},"created":"2026-10-10T23:53:53Z","updated":"2026-10-10T23:53:53Z","service_tier":"standard","object":"interaction","model":"gemini-2.5-flash"},"event_type":"interaction.completed"}\n\nevent: done\ndata: [DONE]\n\n';
+// live K5 object, 2026-10-10T23:52Z, HTTP 400; sha256 47bf2457a5e3a8a653b06bfdb4329f82cf76ce98f02803abd99319627c291aad
+const VARIANT_K5_MALFORMED =
+  '{"error":{"message":"Model generated invalid JSON syntax and the output could not be parsed. Please retry the request. If the issue persists, include this error message in the retry prompt to instruct the model to produce valid JSON.","code":"malformed_tool_call"}}';
+const nativeVariants = {
+  k9Object: VARIANT_K9_OBJECT,
+  k9Stream: VARIANT_K9_STREAM,
+  k5Malformed: VARIANT_K5_MALFORMED,
+} as const;
+const captureNamed = (name: string) => incompleteCaptures.find((c) => c.name === name)!;
+
+describe("Gemini Interactions native upstream variants", () => {
+  it("K9 object accepts the captured trailing model_output step", async () => {
+    await compareLocalIncomplete(captureNamed("K9 object"), nativeVariants.k9Object, {
+      liveNative: true,
+    });
+  });
+  it("K9 stream accepts the captured trailing model_output step", async () => {
+    await compareLocalIncomplete(captureNamed("K9 stream"), nativeVariants.k9Stream, {
+      liveNative: true,
+    });
+  });
+  it("K9 variants are rejected outside the live native leg", async () => {
+    await expect(
+      compareLocalIncomplete(captureNamed("K9 object"), nativeVariants.k9Object),
+    ).rejects.toThrow();
+    await expect(
+      compareLocalIncomplete(captureNamed("K9 stream"), nativeVariants.k9Stream),
+    ).rejects.toThrow();
+  });
+  it("K9 object rejects non-matching trailing answers", async () => {
+    const capture = captureNamed("K9 object");
+    const base = nativeObject(JSON.parse(nativeVariants.k9Object));
+    const [thought, answer] = base.steps as Record<string, unknown>[];
+    const usage = nativeObject(base.usage);
+    const mutants = [
+      { ...base, steps: [thought, answer, answer] },
+      { ...base, steps: [answer, thought] },
+      { ...base, steps: [thought, { ...answer, type: "function_call" }] },
+      { ...base, steps: [thought, { ...answer, content: [] }] },
+      { ...base, steps: [thought, { ...answer, extra: 1 }] },
+      // Keeps the "model_output" marker so the variant path is taken.
+      { ...base, model_output: 1, steps: [thought, { ...answer, type: "function_call" }] },
+      { ...base, steps: [thought, { ...answer, content: [{ type: "text", text: "" }] }] },
+      {
+        ...base,
+        steps: [
+          thought,
+          {
+            ...answer,
+            content: [...(answer.content as unknown[]), ...(answer.content as unknown[])],
+          },
+        ],
+      },
+      { ...base, output_text: "Let $" },
+      { ...base, status: "completed" },
+      { ...base, usage: { ...usage, total_output_tokens: 7, total_tokens: 74 } },
+      { ...base, usage: { ...usage, total_output_tokens: 0, total_tokens: 67 } },
+      { ...base, usage: { ...usage, total_tokens: 70 } },
+    ];
+    for (const mutant of mutants) {
+      await expect(
+        compareLocalIncomplete(capture, JSON.stringify(mutant), { liveNative: true }),
+      ).rejects.toThrow();
+    }
+  });
+  it("K9 stream rejects non-matching trailing answers", async () => {
+    const capture = captureNamed("K9 stream");
+    const raw = nativeVariants.k9Stream;
+    const frames = raw.split("\n\n");
+    const at = (prefix: string, from = 0) =>
+      frames.findIndex((frame, index) => index >= from && frame.startsWith(prefix));
+    const answerStart = at("event: step.start\n", at("event: step.stop\n"));
+    const signature = answerStart - 2;
+    const answerDelta = answerStart + 1;
+    const without = (index: number) => frames.filter((_, i) => i !== index).join("\n\n");
+    const mutants = [
+      // Missing thought_signature delta, and one with the wrong delta type.
+      without(signature),
+      raw.replace('"type":"thought_signature"', '"type":"other"'),
+      // Answer step with no text delta.
+      without(answerDelta),
+      // A second model_output step.
+      [
+        ...frames.slice(0, answerDelta + 2),
+        frames[answerStart].replace('"index":1', '"index":2'),
+        frames[answerDelta].replace('"index":1', '"index":2'),
+        frames[answerDelta + 1].replace('"index":1', '"index":2'),
+        ...frames.slice(answerDelta + 2),
+      ].join("\n\n"),
+      // Wrong answer step type and wrong delta type.
+      raw.replace('"step":{"type":"model_output"}', '"step":{"type":"function_call"}'),
+      raw.replace('"step":{"type":"model_output"}', '"step":{"type":"model_output","extra":1}'),
+      raw.replace('"delta":{"text":"Let","type":"text"}', '"delta":{"text":"","type":"text"}'),
+      raw.replace('"delta":{"text":"Let","type":"text"}', '"delta":{"text":"Let","type":"other"}'),
+      // Seven answer deltas.
+      [
+        ...frames.slice(0, answerDelta),
+        ...Array.from({ length: 7 }, () => frames[answerDelta]),
+        ...frames.slice(answerDelta + 1),
+      ].join("\n\n"),
+      // Answer surfaced in the terminal interaction.
+      raw.replace(
+        '"status":"incomplete","usage"',
+        '"status":"incomplete","output_text":"Let","usage"',
+      ),
+    ];
+    for (const mutant of mutants) {
+      expect(mutant).not.toBe(raw);
+      await expect(compareLocalIncomplete(capture, mutant, { liveNative: true })).rejects.toThrow();
+    }
+  });
+  it("K5 accepts only a 400 malformed_tool_call body", () => {
+    const raw = nativeVariants.k5Malformed;
+    expect(isMalformedToolCall(400, raw)).toBe(true);
+    const error = nativeObject(nativeObject(JSON.parse(raw)).error);
+    for (const status of [200, 429, 500]) expect(isMalformedToolCall(status, raw)).toBe(false);
+    for (const body of [
+      { error: { ...error, code: "invalid_request" } },
+      { error: { ...error, code: "MALFORMED_TOOL_CALL" } },
+      { error: { message: error.message } },
+      { error: { ...error, status: "INVALID_ARGUMENT" } },
+      { error, steps: [] },
+      { error: { ...error, message: 1 } },
+    ]) {
+      expect(isMalformedToolCall(400, JSON.stringify(body))).toBe(false);
+    }
+    expect(isMalformedToolCall(400, "not json")).toBe(false);
   });
 });
 
