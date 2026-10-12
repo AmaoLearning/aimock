@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- **MCP: `tools/list` now gives every registered tool an `inputSchema`.** A tool registered with `addTool()` without an `inputSchema`, or only with `onToolCall()`, was listed with no `inputSchema`, and the official MCP SDK client rejected the whole `tools/list` response. These tools are now listed with `inputSchema: { "type": "object" }`, as fake-only tools already were, so the `tools/list` response for them now includes that field. Tools registered with an `inputSchema` are listed unchanged (#529).
 - **MCP: `tools/list` now adds `"type": "object"` to a registered `inputSchema` that has no `type`.** A schema such as `{}` or `{ "properties": { ... } }` was listed as is, and the official MCP SDK client rejected the whole `tools/list` response (`inputSchema.type: expected "object"`). Such a schema is now listed with `"type": "object"` added and its other keys kept. A schema with an explicit `type` is listed unchanged (#529).
 
 ## [1.45.0] - 2026-10-10

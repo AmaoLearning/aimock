@@ -538,9 +538,14 @@ mcp.onToolCall(<span class="str">"rich-tool"</span>, () =&gt; [
         <p>
           <code>tools/list</code> returns the registered tools plus the tools named in the
           request&rsquo;s blocks. A fake-only tool is listed with its <code>description</code> and
-          <code>inputSchema</code>, or with <code>{ "type": "object" }</code> as its schema. When a
-          tool is both registered and faked, the registered definition is listed. Fakes never remove
-          a registered tool from the list.
+          <code>inputSchema</code>, or with <code>{ "type": "object" }</code> as its schema. A
+          registered tool without an <code>inputSchema</code> (an <code>addTool()</code> call
+          without one, or a tool that has only an <code>onToolCall</code> handler) is also listed
+          with <code>{ "type": "object" }</code> as its schema. A registered
+          <code>inputSchema</code> that has no <code>type</code> is listed with
+          <code>"type": "object"</code> added and its other keys kept. When a tool is both
+          registered and faked, the registered definition is listed. Fakes never remove a registered
+          tool from the list.
         </p>
 
         <h3>Errors</h3>
