@@ -2,14 +2,16 @@
 
 ## [Unreleased]
 
+## [1.45.1] - 2026-10-11
+
 ### Changed
 
-- **OpenRouter Video: `openai/sora-2` now returns the real removal rejection, not a job.** OpenRouter removed the model, and a live submit returns `400 {"error":{"message":"Model openai/sora-2 does not exist","code":400}}`. `POST /api/v1/videos` with `model: "openai/sora-2"` now returns that 400 even when a fixture matches, and never reaches a record-mode upstream. The default `GET /api/v1/videos/models` listing no longer includes `openai/sora-2`, and a fixture for it no longer adds it to the listing. Move fixtures to a model OpenRouter still serves (for example `bytedance/seedance-2.0`). The daily drift check now confirms the model stays absent instead of requiring it.
+- OpenRouter Video: `openai/sora-2` now returns OpenRouter's 400 removal error, not a job (#520)
 
 ### Fixed
 
-- **MCP: `tools/list` now gives every registered tool an `inputSchema`.** A tool registered with `addTool()` without an `inputSchema`, or only with `onToolCall()`, was listed with no `inputSchema`, and the official MCP SDK client rejected the whole `tools/list` response. These tools are now listed with `inputSchema: { "type": "object" }`, as fake-only tools already were, so the `tools/list` response for them now includes that field. Tools registered with an `inputSchema` are listed unchanged (#529).
-- **MCP: `tools/list` now adds `"type": "object"` to a registered `inputSchema` that has no `type`.** A schema such as `{}` or `{ "properties": { ... } }` was listed as is, and the official MCP SDK client rejected the whole `tools/list` response (`inputSchema.type: expected "object"`). Such a schema is now listed with `"type": "object"` added and its other keys kept. A schema with an explicit `type` is listed unchanged (#529).
+- MCP `tools/list`: a tool registered without `inputSchema` now lists `{"type":"object"}` (#529)
+- MCP `tools/list`: a registered `inputSchema` with no `type` now gets `"type": "object"` (#529)
 
 ## [1.45.0] - 2026-10-10
 
