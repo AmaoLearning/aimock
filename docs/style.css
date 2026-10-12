@@ -486,6 +486,11 @@ body::before {
 .comparison-table .partial {
   color: var(--warning);
 }
+.matrix-legend {
+  margin: 0.35rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
 
 /* ─── Info Box ────────────────────────────────────────────────── */
 .info-box {

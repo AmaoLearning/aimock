@@ -1299,6 +1299,11 @@
         color: var(--blue);
         font-size: 0.75rem;
       }
+      .matrix-legend {
+        margin: 0.35rem 0 0;
+        font-size: 0.72rem;
+        color: var(--text-dim);
+      }
 
       /* ─── Footer ─────────────────────────────────────────────────── */
       footer {
@@ -3198,7 +3203,7 @@
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Responses API SSE</th>
@@ -3209,7 +3214,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Claude Messages API</th>
@@ -3220,7 +3225,7 @@
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Gemini streaming</th>
@@ -3231,7 +3236,7 @@
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Multi-provider support</th>
@@ -3244,7 +3249,7 @@
                 <td>OpenAI only</td>
                 <td>5 providers</td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">OpenRouter router / fallback simulation</th>
@@ -3255,7 +3260,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="partial">partial</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">WebSocket APIs</th>
@@ -3277,7 +3282,7 @@
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Image generation</th>
@@ -3288,7 +3293,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Image editing</th>
@@ -3299,7 +3304,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Text-to-Speech</th>
@@ -3310,7 +3315,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Audio transcription</th>
@@ -3320,8 +3325,8 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Audio translation</th>
@@ -3331,8 +3336,8 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Non-speech audio</th>
@@ -3343,7 +3348,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Video generation</th>
@@ -3353,8 +3358,8 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">AG-UI event mocking</th>
@@ -3364,8 +3369,8 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">MCP tool mocking</th>
@@ -3376,7 +3381,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Scenario-scoped MCP tool fakes</th>
@@ -3386,8 +3391,8 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Fail on undeclared MCP tool</th>
@@ -3397,8 +3402,8 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">A2A agent mocking</th>
@@ -3409,7 +3414,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Vector DB mocking</th>
@@ -3419,8 +3424,8 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
-                <td>Not documented</td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Search &amp; rerank</th>
@@ -3431,7 +3436,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="partial">partial</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Record &amp; replay</th>
@@ -3517,11 +3522,21 @@
                   <a href="/model-misbehavior"><span class="yes">Built-in &#10003;</span></a>
                 </td>
                 <!-- C-X40; prototype mark pending final source verification -->
-                <td><a href="https://github.com/mswjs/msw">Not documented</a></td>
+                <td>
+                  <a href="https://github.com/mswjs/msw"><abbr title="Not documented">ND</abbr></a>
+                </td>
                 <!-- C-X41; prototype mark pending final source verification -->
-                <td><a href="https://github.com/vidaiUK/VidaiMock">Not documented</a></td>
+                <td>
+                  <a href="https://github.com/vidaiUK/VidaiMock"
+                    ><abbr title="Not documented">ND</abbr></a
+                  >
+                </td>
                 <!-- C-X42; prototype mark pending final source verification -->
-                <td><a href="https://github.com/dwmkerr/mock-llm">Not documented</a></td>
+                <td>
+                  <a href="https://github.com/dwmkerr/mock-llm"
+                    ><abbr title="Not documented">ND</abbr></a
+                  >
+                </td>
                 <!-- C-X43; reviewed 2026-10-08: authored max_tokens/refusal, not automatic truncation or a tool-fault catalog -->
                 <td>
                   <a
@@ -3544,7 +3559,11 @@
                   >
                 </td>
                 <!-- C-W30; prototype mark pending final source verification -->
-                <td><a href="https://wiremock.org/docs/solutions/ai/">Not documented</a></td>
+                <td>
+                  <a href="https://wiremock.org/docs/solutions/ai/"
+                    ><abbr title="Not documented">ND</abbr></a
+                  >
+                </td>
               </tr>
               <tr>
                 <th scope="row">Streaming physics</th>
@@ -3566,7 +3585,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Programmatic API</th>
@@ -3603,7 +3622,7 @@
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Vitest / Jest plugins</th>
@@ -3614,7 +3633,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="partial">partial</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Docker + Helm</th>
@@ -3649,7 +3668,7 @@
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="partial">partial</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Rate limiting headers</th>
@@ -3660,7 +3679,7 @@
                 <td><span class="partial">partial</span></td>
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
                 <td><span class="partial">partial</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Dependencies</th>
@@ -3676,6 +3695,12 @@
             </tbody>
           </table>
         </div>
+        <p class="matrix-legend">
+          <span class="yes" aria-hidden="true">&#10003;</span> supported &middot;
+          <span class="partial">partial</span> &middot; <span class="manual">manual</span> &middot;
+          <span class="no" aria-hidden="true">&#10007;</span> not supported &middot;
+          <abbr title="Not documented">ND</abbr> not documented
+        </p>
 
         <div
           id="mcp-fakes-preview"
@@ -3723,7 +3748,7 @@
                 <td class="col-aimock">
                   <span class="yes" role="img" aria-label="Yes">&#10003;</span>
                 </td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
               </tr>
               <tr>
@@ -3741,7 +3766,7 @@
                   <span class="yes" role="img" aria-label="Yes">&#10003;</span>
                 </td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Exact-argument matching</th>
@@ -3749,7 +3774,7 @@
                   <span class="yes" role="img" aria-label="Yes">&#10003;</span>
                 </td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Any-argument matching</th>
@@ -3768,14 +3793,14 @@
                   <span class="yes" role="img" aria-label="Yes">&#10003;</span>
                 </td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Scripted tool errors</th>
                 <td class="col-aimock">
                   <span class="yes" role="img" aria-label="Yes">&#10003;</span>
                 </td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
               </tr>
               <tr>
@@ -3784,14 +3809,14 @@
                   <span class="yes" role="img" aria-label="Yes">&#10003;</span>
                 </td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">LLM responses mocked in the same scenario</th>
                 <td class="col-aimock">
                   <span class="yes" role="img" aria-label="Yes">&#10003;</span>
                 </td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
                 <td><span class="partial">partial</span></td>
               </tr>
               <tr>
@@ -3810,7 +3835,7 @@
                   the test)
                 </td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
-                <td>Not documented</td>
+                <td><abbr title="Not documented">ND</abbr></td>
               </tr>
               <tr>
                 <th scope="row">Workflow / multi-step pipeline targets</th>
@@ -3827,6 +3852,12 @@
             </tbody>
           </table>
         </div>
+        <p class="matrix-legend">
+          <span class="yes" aria-hidden="true">&#10003;</span> supported &middot;
+          <span class="partial">partial</span> &middot;
+          <span class="no" aria-hidden="true">&#10007;</span> not supported &middot;
+          <abbr title="Not documented">ND</abbr> not documented
+        </p>
       </div>
     </section>
 

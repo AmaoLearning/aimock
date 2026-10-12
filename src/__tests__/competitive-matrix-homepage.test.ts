@@ -143,7 +143,7 @@ describe("parseCurrentMatrix on the real homepage", () => {
     );
     for (const name of ["MSW", "VidaiMock", "mock-llm", "WireMock"]) {
       const cell = row?.get(name);
-      expect(cell).toContain("Not documented");
+      expect(cell).toContain('<abbr title="Not documented">ND</abbr>');
       expect(cell).toContain("href=");
       expect(cell).not.toMatch(NO_CELL);
       expect(cell).not.toContain('aria-label="No"');
