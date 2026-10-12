@@ -393,6 +393,29 @@ describe("MCPMock", () => {
       ]);
     });
 
+    it("tools/list adds type object to an inputSchema without a type", async () => {
+      // The official SDK clients also reject the whole list when a tool's
+      // inputSchema has no `type`. Other keys are kept; an explicit type is not
+      // rewritten.
+      mcp = new MCPMock();
+      mcp.addTool({ name: "empty", inputSchema: {} });
+      mcp.addTool({ name: "props", inputSchema: { properties: { q: { type: "string" } } } });
+      mcp.addTool({ name: "typed", inputSchema: { type: "object", required: [] } });
+      const url = await mcp.start();
+      const sessionId = await initSession(url);
+
+      const res = await jsonRpc(url, "/", "tools/list", {}, 1, { "mcp-session-id": sessionId });
+      const data = JSON.parse(res.body);
+      expect(data.result.tools).toEqual([
+        { name: "empty", inputSchema: { type: "object" } },
+        {
+          name: "props",
+          inputSchema: { type: "object", properties: { q: { type: "string" } } },
+        },
+        { name: "typed", inputSchema: { type: "object", required: [] } },
+      ]);
+    });
+
     it("tools/call with function handler", async () => {
       mcp = new MCPMock();
       mcp.onToolCall("add", (args: unknown) => {

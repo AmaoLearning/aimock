@@ -450,10 +450,16 @@ export function createMCPRequestHandler(state: MCPState) {
 
       "tools/list": async (_params, id, req) => {
         const tools: MCPToolDefinition[] = [];
-        // inputSchema is required on every listed Tool; a tool registered
-        // without one lists `{ type: "object" }`, as fake tools already do.
+        // inputSchema is required on every listed Tool, with a root `type`; a
+        // tool registered without one lists `{ type: "object" }`, as fake
+        // tools already do, and a schema without a `type` gets
+        // `type: "object"` added. An explicit `type` is left as is.
         for (const { def } of state.tools.values()) {
-          tools.push(def.inputSchema ? def : { ...def, inputSchema: { type: "object" } });
+          tools.push(
+            def.inputSchema?.type !== undefined
+              ? def
+              : { ...def, inputSchema: { type: "object", ...def.inputSchema } },
+          );
         }
         const ctx = contexts.get(req);
         // AM7: a recorded list comes first, in recorded order (its definition
