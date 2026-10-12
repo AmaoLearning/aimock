@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Responses API (HTTP, SSE, WebSocket): optional `phase` response override (`commentary` | `final_answer`) on assistant message output items; validated on load (#531)
+
 ## [1.45.1] - 2026-10-11
 
 ### Changed
