@@ -948,6 +948,16 @@ builderMock.onLive({ model: "gpt-live-1" }, transcript);</code></pre>
               <td>Override message role (default: "assistant")</td>
             </tr>
             <tr>
+              <td>phase</td>
+              <td>"commentary" | "final_answer"</td>
+              <td>
+                OpenAI Responses API (HTTP and WebSocket) only: labels each assistant message output
+                item. Preserved in streaming added/done items, the completed response, and
+                non-streaming output. Omitted by default; never inferred from content or finish
+                reason. Does not label reasoning or tool-call items
+              </td>
+            </tr>
+            <tr>
               <td>systemFingerprint</td>
               <td>string</td>
               <td>Add system_fingerprint to response</td>

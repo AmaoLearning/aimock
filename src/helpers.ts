@@ -1523,6 +1523,7 @@ export function extractOverrides(
     ...(r.systemFingerprint !== undefined && { systemFingerprint: r.systemFingerprint }),
     ...(r.finishReason !== undefined && { finishReason: r.finishReason }),
     ...(r.role !== undefined && { role: r.role }),
+    ...(r.phase !== undefined && { phase: r.phase }),
     ...(r.provider !== undefined && { provider: r.provider }),
     ...(r.nativeFinishReason !== undefined && { nativeFinishReason: r.nativeFinishReason }),
   };

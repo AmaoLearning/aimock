@@ -594,6 +594,7 @@ export function buildTextStreamEvents(
     content,
     chunkSize,
     nextOutputIndex,
+    overrides?.phase,
   );
   events.push(...msgEvents);
 
@@ -1134,6 +1135,7 @@ function buildMessageOutputEvents(
   content: string,
   chunkSize: number,
   outputIndex: number,
+  phase?: ResponseOverrides["phase"],
 ): MessageBlockResult {
   const msgId = itemId();
   const events: ResponsesSSEEvent[] = [];
@@ -1141,7 +1143,14 @@ function buildMessageOutputEvents(
   events.push({
     type: "response.output_item.added",
     output_index: outputIndex,
-    item: { type: "message", id: msgId, status: "in_progress", role: "assistant", content: [] },
+    item: {
+      type: "message",
+      id: msgId,
+      status: "in_progress",
+      role: "assistant",
+      ...(phase !== undefined ? { phase } : {}),
+      content: [],
+    },
   });
   events.push({
     type: "response.content_part.added",
@@ -1181,6 +1190,7 @@ function buildMessageOutputEvents(
     id: msgId,
     status: "completed",
     role: "assistant",
+    ...(phase !== undefined ? { phase } : {}),
     content: [{ type: "output_text", text: content, annotations: [] }],
   };
 
@@ -1326,6 +1336,7 @@ function buildOutputPrefix(
   webSearches?: string[],
   emitEncryptedReasoning = false,
   synthesizeSummarylessReasoning = false,
+  phase?: ResponseOverrides["phase"],
 ): object[] {
   const output: object[] = [];
 
@@ -1357,6 +1368,7 @@ function buildOutputPrefix(
     id: itemId(),
     status: "completed",
     role: "assistant",
+    ...(phase !== undefined ? { phase } : {}),
     content: [{ type: "output_text", text: content, annotations: [] }],
   });
 
@@ -1397,6 +1409,7 @@ export function buildTextResponse(
       webSearches,
       emitEncryptedReasoning,
       synthesizeSummarylessReasoning,
+      overrides?.phase,
     ),
     overrides,
   );
@@ -1512,6 +1525,7 @@ export function contentWithToolCallsStreamEvents(
           block.text,
           chunkSize,
           outputIndex,
+          overrides?.phase,
         );
         events.push(...msgEvents);
         orderedOutputItems.push(msgItem);
@@ -1536,6 +1550,7 @@ export function contentWithToolCallsStreamEvents(
       content,
       chunkSize,
       nextOutputIndex,
+      overrides?.phase,
     );
     events.push(...msgEvents);
     orderedOutputItems.push(msgItem);
@@ -1587,12 +1602,13 @@ function buildToolCallOutputItem(tc: EmittableToolCall): object {
   );
 }
 
-function buildMessageOutputItem(content: string): object {
+function buildMessageOutputItem(content: string, phase?: ResponseOverrides["phase"]): object {
   return {
     type: "message",
     id: itemId(),
     status: "completed",
     role: "assistant",
+    ...(phase !== undefined ? { phase } : {}),
     content: [{ type: "output_text", text: content, annotations: [] }],
   };
 }
@@ -1638,7 +1654,7 @@ function buildContentWithToolCallsResponse(
     }
     for (const block of ordered) {
       if (block.type === "text") {
-        output.push(buildMessageOutputItem(block.text));
+        output.push(buildMessageOutputItem(block.text, overrides?.phase));
       } else {
         output.push(buildToolCallOutputItem(block));
       }
@@ -1656,6 +1672,7 @@ function buildContentWithToolCallsResponse(
     webSearches,
     emitEncryptedReasoning,
     synthesizeSummarylessReasoning,
+    overrides?.phase,
   );
   for (const tc of toolCalls) {
     output.push(buildToolCallOutputItem(tc));
@@ -2350,7 +2367,14 @@ export function buildResponsesMisbehavior(
   if (plan.refusal !== undefined) {
     const id = itemId();
     const part = { type: "refusal", refusal: plan.refusal };
-    const item = { id, type: "message", role: "assistant", status: "completed", content: [part] };
+    const item = {
+      id,
+      type: "message",
+      role: "assistant",
+      status: "completed",
+      ...(overrides.phase !== undefined ? { phase: overrides.phase } : {}),
+      content: [part],
+    };
     const position = { item_id: id, output_index: outputIndex, content_index: 0 };
     events.push(
       {
@@ -2392,7 +2416,12 @@ export function buildResponsesMisbehavior(
     let callIndex = 0;
     for (const block of blocks) {
       if (block.type === "text") {
-        const message = buildMessageOutputEvents(block.text, chunkSize, outputIndex);
+        const message = buildMessageOutputEvents(
+          block.text,
+          chunkSize,
+          outputIndex,
+          overrides.phase,
+        );
         events.push(...message.events);
         output.push(message.msgItem);
       } else {

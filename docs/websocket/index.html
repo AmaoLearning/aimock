@@ -417,7 +417,9 @@ send({ type: &quot;response.create&quot;, event_id: &quot;continue-1&quot; });</
           <li>
             <strong>Commentary phase</strong> &mdash; <code>phase</code> field on
             <code>response.output_item.added/done</code> events (<code>final_answer</code> or
-            <code>commentary</code>)
+            <code>commentary</code>). The text message gets <code>commentary</code> when the
+            response also includes tool calls, otherwise <code>final_answer</code>. The fixture
+            <code>phase</code> override applies to the Responses API only
           </li>
           <li>
             <strong><code>conversation.item.done</code></strong> &mdash; New event emitted after

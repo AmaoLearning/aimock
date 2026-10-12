@@ -267,8 +267,8 @@ export interface FixtureMatch {
  * systemFingerprint, finishReason, role); provider and nativeFinishReason are
  * OpenRouter-only and ignored elsewhere. OpenAI Chat honors the seven common
  * fields; OpenRouter additionally honors provider/nativeFinishReason; Responses
- * API (5: no role, systemFingerprint); Claude (5: no created,
- * systemFingerprint); Gemini (2: only finishReason, usage).
+ * API honors five common fields (no role, systemFingerprint) plus optional phase;
+ * Claude (5: no created, systemFingerprint); Gemini (2: only finishReason, usage).
  */
 export interface ResponseOverrides {
   id?: string;
@@ -335,6 +335,13 @@ export interface ResponseOverrides {
   systemFingerprint?: string;
   finishReason?: string;
   role?: string;
+  /**
+   * OpenAI Responses message phase (HTTP and WebSocket). Applied to each
+   * emitted assistant message, never to reasoning or tool-call items. Omitted
+   * unless supplied; aimock does not infer a phase from content or stop reason.
+   * Ignored by other providers.
+   */
+  phase?: "commentary" | "final_answer";
   /**
    * OpenRouter top-level `provider` override. When omitted, OpenRouter-shaped
    * responses default it to the author segment of the winning model slug
