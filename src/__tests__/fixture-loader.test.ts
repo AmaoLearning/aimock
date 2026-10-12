@@ -1754,6 +1754,20 @@ describe("validateFixtures", () => {
 
   // --- ResponseOverrides validation ---
 
+  it.each(["commentary", "final_answer"] as const)("accepts message phase %s", (phase) => {
+    const fixtures = [makeFixture({ response: { content: "hi", phase } })];
+    const results = validateFixtures(fixtures);
+    expect(results.filter((r) => r.severity === "error")).toEqual([]);
+  });
+
+  it.each(["final", "FINAL_ANSWER", "", null, 42])("rejects invalid message phase %s", (phase) => {
+    const fixtures = [makeFixture({ response: { content: "hi", phase: phase as never } })];
+    const results = validateFixtures(fixtures);
+    expect(
+      results.some((r) => r.severity === "error" && r.message.includes('override "phase"')),
+    ).toBe(true);
+  });
+
   it("error: created as a string", () => {
     const fixtures = [makeFixture({ response: { content: "hi", created: "2024-01-01" as never } })];
     const results = validateFixtures(fixtures);
@@ -2169,6 +2183,7 @@ describe("auto-stringify JSON objects in fixture entries", () => {
         finishReason: "stop",
         role: "assistant",
         systemFingerprint: "fp-123",
+        phase: "final_answer",
         usage: { prompt_tokens: 10 },
       },
     };
@@ -2182,6 +2197,7 @@ describe("auto-stringify JSON objects in fixture entries", () => {
     expect(r.finishReason).toBe("stop");
     expect(r.role).toBe("assistant");
     expect(r.systemFingerprint).toBe("fp-123");
+    expect(r.phase).toBe("final_answer");
     expect(r.usage).toEqual({ prompt_tokens: 10 });
   });
 

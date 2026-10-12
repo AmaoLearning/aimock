@@ -1355,6 +1355,13 @@ export function validateFixtures(
             message: `override "role" must be a string, got ${typeof r.role}`,
           });
         }
+        if (r.phase !== undefined && r.phase !== "commentary" && r.phase !== "final_answer") {
+          results.push({
+            severity: "error",
+            fixtureIndex: i,
+            message: 'override "phase" must be "commentary" or "final_answer"',
+          });
+        }
         if (r.systemFingerprint !== undefined && typeof r.systemFingerprint !== "string") {
           results.push({
             severity: "error",
