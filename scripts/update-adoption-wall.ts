@@ -355,6 +355,8 @@ export const ADOPTER_DISPLAY: Record<string, AdopterDisplay> = {
     url: "https://agentskillexchange.com",
   },
   "affromero/flight-finder": { name: "Flight Finder", url: "https://flight-finder.org" },
+  "alpic-ai/skybridge": { name: "Skybridge", url: "https://www.skybridge.tech" },
+  "ackness/covel": { name: "Covel", url: "https://covel.cc" },
 };
 
 /**

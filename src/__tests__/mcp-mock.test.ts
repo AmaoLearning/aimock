@@ -3,6 +3,7 @@ import * as http from "node:http";
 import { MCPMock } from "../mcp-mock.js";
 import { LLMock } from "../llmock.js";
 import type { MCPContent } from "../mcp-types.js";
+import { ReadResourceResultSchema } from "@modelcontextprotocol/sdk/types.js";
 
 // ---- HTTP Helpers ----
 
@@ -782,8 +783,33 @@ describe("MCPMock", () => {
       });
       const data = JSON.parse(res.body);
       expect(data.result.contents[0].uri).toBe("file:///empty");
-      expect(data.result.contents[0].text).toBeUndefined();
+      // MCP resource contents must carry text or blob, so no content reads as empty text.
+      expect(data.result.contents[0].text).toBe("");
       expect(data.result.contents[0].blob).toBeUndefined();
+      expect(ReadResourceResultSchema.safeParse(data.result).success).toBe(true);
+    });
+
+    it("resources/read falls back to the definition's mimeType", async () => {
+      mcp = new MCPMock();
+      mcp.addResource({ uri: "file:///notes.md", name: "Notes", mimeType: "text/markdown" });
+      mcp.addResource(
+        { uri: "file:///data.csv", name: "Data", mimeType: "text/csv" },
+        { text: "a,b" },
+      );
+      const url = await mcp.start();
+      const sessionId = await initSession(url);
+
+      for (const [uri, mimeType] of [
+        ["file:///notes.md", "text/markdown"],
+        ["file:///data.csv", "text/csv"],
+      ]) {
+        const res = await jsonRpc(url, "/", "resources/read", { uri }, 1, {
+          "mcp-session-id": sessionId,
+        });
+        const data = JSON.parse(res.body);
+        expect(data.result.contents[0].mimeType).toBe(mimeType);
+        expect(ReadResourceResultSchema.safeParse(data.result).success).toBe(true);
+      }
     });
   });
 

@@ -591,13 +591,19 @@ export function createMCPRequestHandler(state: MCPState) {
         if (!entry) {
           return jsonRpcError(id, -32602, `Unknown resource: ${uri}`);
         }
+        const text = entry.content?.text;
+        const blob = entry.content?.blob;
+        // A resource added without content still needs text or blob: MCP clients
+        // reject resource contents that carry neither.
+        const mimeType = entry.content?.mimeType ?? entry.def.mimeType;
         return jsonRpcResult(id, {
           contents: [
             {
               uri,
-              ...(entry.content?.text !== undefined && { text: entry.content.text }),
-              ...(entry.content?.blob !== undefined && { blob: entry.content.blob }),
-              ...(entry.content?.mimeType !== undefined && { mimeType: entry.content.mimeType }),
+              ...(text !== undefined && { text }),
+              ...(blob !== undefined && { blob }),
+              ...(text === undefined && blob === undefined && { text: "" }),
+              ...(mimeType !== undefined && { mimeType }),
             },
           ],
         });

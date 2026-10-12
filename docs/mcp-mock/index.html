@@ -1359,6 +1359,12 @@ mcp.onToolCall(<span class="str">"rich-tool"</span>, () =&gt; [
   { text: <span class="str">"# My Project\nWelcome!"</span> },
 );</code></pre>
         </div>
+        <p>
+          The content argument is optional. A resource whose content has neither
+          <code>text</code> nor <code>blob</code> (including one added without content) is read as
+          <code>"text": ""</code>. When the content has no <code>mimeType</code>, the read uses the
+          <code>mimeType</code> of the resource definition.
+        </p>
 
         <h2>Prompts</h2>
         <p>Register prompt templates with optional handlers:</p>

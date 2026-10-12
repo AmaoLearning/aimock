@@ -6,6 +6,11 @@
 
 - Responses API (HTTP, SSE, WebSocket): optional `phase` response override (`commentary` | `final_answer`) on assistant message output items; validated on load (#531)
 
+### Fixed
+
+- MCP `resources/read`: a resource whose content has neither `text` nor `blob` (including one added without content) now reads as `"text": ""` (#533)
+- MCP `resources/read`: the read uses the resource definition's `mimeType` when its content has none (#533)
+
 ## [1.45.1] - 2026-10-11
 
 ### Changed
