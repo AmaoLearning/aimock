@@ -1,14 +1,22 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
+import {
+  BedrockRuntimeClient,
+  ConverseCommand,
+  InvokeModelCommand,
+  InvokeModelWithResponseStreamCommand,
+} from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { mapAnthropicFinish } from "../response/finish.js";
 import { createServer } from "../server.js";
 
-async function requestConverseText(finishReason?: string) {
+async function withBedrockClient<T>(
+  finishReason: string | undefined,
+  request: (client: BedrockRuntimeClient) => Promise<T>,
+) {
   const instance = await createServer(
     [
       {
@@ -26,12 +34,7 @@ async function requestConverseText(finishReason?: string) {
     maxAttempts: 1,
   });
   try {
-    return await client.send(
-      new ConverseCommand({
-        modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        messages: [{ role: "user", content: [{ text: "hello" }] }],
-      }),
-    );
+    return await request(client);
   } finally {
     client.destroy();
     await new Promise<void>((resolve, reject) => {
@@ -39,6 +42,55 @@ async function requestConverseText(finishReason?: string) {
     });
   }
 }
+
+async function requestConverseText(finishReason?: string) {
+  return withBedrockClient(finishReason, (client) =>
+    client.send(
+      new ConverseCommand({
+        modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages: [{ role: "user", content: [{ text: "hello" }] }],
+      }),
+    ),
+  );
+}
+
+async function requestInvokeStopReason(finishReason: string | undefined, streaming: boolean) {
+  return withBedrockClient(finishReason, async (client) => {
+    const input = {
+      modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      contentType: "application/json",
+      body: JSON.stringify({
+        anthropic_version: "bedrock-2023-05-31",
+        max_tokens: 32,
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    };
+    if (!streaming) {
+      const result = await client.send(new InvokeModelCommand(input));
+      const message = JSON.parse(new TextDecoder().decode(result.body));
+      return message.stop_reason;
+    }
+    const result = await client.send(new InvokeModelWithResponseStreamCommand(input));
+    if (!result.body) throw new Error("InvokeStream response must contain an event stream");
+    for await (const event of result.body) {
+      if (!event.chunk?.bytes) continue;
+      const chunk = JSON.parse(new TextDecoder().decode(event.chunk.bytes));
+      if (chunk.type === "message_delta") return chunk.delta.stop_reason;
+    }
+    throw new Error("InvokeStream response must contain a message_delta event");
+  });
+}
+
+describe("Bedrock Invoke caller defaults", () => {
+  it.each([
+    [undefined, false],
+    ["", false],
+    [undefined, true],
+    ["", true],
+  ] as const)("uses end_turn for finishReason %j with streaming %j", async (reason, streaming) => {
+    expect(await requestInvokeStopReason(reason, streaming)).toBe("end_turn");
+  });
+});
 
 describe("Bedrock Converse caller defaults", () => {
   it.each([undefined, ""])("uses end_turn for finishReason %j", async (reason) => {

@@ -7,9 +7,8 @@
  * is present and that neither fixture count (`input_tokens` 11,
  * `output_tokens` 7, matched as whole numbers) is on the wire. The `control`
  * cases serve the same fixture without a fault and assert both counts do
- * reach the wire, which gives the faulted checks their contrast. The cache
- * keys do not reach the wire on these transports even without a fault, so
- * the faulted no-cache-key check only guards against them appearing.
+ * reach the wire, which gives the faulted checks their contrast. Ordinary
+ * controls retain the supplied cache read/create counts. Applied faults omit them.
  *
  * Determinism: each fixture's `MisbehaviorConfig` has `seed: 0`, and each
  * fault sets `rate: 1` (also the default). The planner applies a fault when
@@ -148,8 +147,8 @@ describe("misbehavior golden corpus (suite: misbehavior)", () => {
           expect(outputs).toContain(fixtureUsage.output_tokens);
         } else {
           // Applied faults serve estimated usage: neither fixture count is on
-          // the wire. Cache keys are absent in control too, so that check only
-          // guards against them appearing.
+          // the wire. Controls retain supplied cache read/create counts.
+          // Applied faults omit those counts.
           expect(inputs).not.toContain(fixtureUsage.input_tokens);
           expect(outputs).not.toContain(fixtureUsage.output_tokens);
           expect(text).not.toMatch(/cache_(read|creation)/);

@@ -856,7 +856,10 @@ function buildBedrockInvokeMessageStart(
   };
 }
 
-function buildBedrockInvokeMessageDelta(stopReason: string): {
+function buildBedrockInvokeMessageDelta(
+  stopReason: string,
+  overrides?: ResponseOverrides,
+): {
   eventType: string;
   payload: object;
 } {
@@ -865,7 +868,7 @@ function buildBedrockInvokeMessageDelta(stopReason: string): {
     payload: {
       type: "message_delta",
       delta: { stop_reason: stopReason, stop_sequence: null },
-      usage: renderAnthropicUsage(resolveAnthropicUsage(), "bedrock-delta"),
+      usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "bedrock-delta"),
     },
   };
 }
@@ -961,7 +964,10 @@ export function buildBedrockStreamTextEvents(
   });
 
   events.push(
-    buildBedrockInvokeMessageDelta(bedrockStopReason(overrides?.finishReason, "end_turn")),
+    buildBedrockInvokeMessageDelta(
+      bedrockStopReason(overrides?.finishReason, "end_turn"),
+      overrides,
+    ),
   );
   events.push(buildBedrockInvokeMessageStop());
 
@@ -1096,6 +1102,7 @@ export function buildBedrockStreamContentWithToolCallsEvents(
     events.push(
       buildBedrockInvokeMessageDelta(
         bedrockStopReason(overrides?.finishReason, outcome.hasToolCalls ? "tool_use" : "end_turn"),
+        overrides,
       ),
     );
     events.push(buildBedrockInvokeMessageStop());
@@ -1170,7 +1177,10 @@ export function buildBedrockStreamContentWithToolCallsEvents(
   }
 
   events.push(
-    buildBedrockInvokeMessageDelta(bedrockStopReason(overrides?.finishReason, "tool_use")),
+    buildBedrockInvokeMessageDelta(
+      bedrockStopReason(overrides?.finishReason, "tool_use"),
+      overrides,
+    ),
   );
   events.push(buildBedrockInvokeMessageStop());
 
@@ -1268,7 +1278,10 @@ export function buildBedrockStreamToolCallEvents(
   }
 
   events.push(
-    buildBedrockInvokeMessageDelta(bedrockStopReason(overrides?.finishReason, "tool_use")),
+    buildBedrockInvokeMessageDelta(
+      bedrockStopReason(overrides?.finishReason, "tool_use"),
+      overrides,
+    ),
   );
   events.push(buildBedrockInvokeMessageStop());
 

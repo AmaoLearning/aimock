@@ -4,6 +4,8 @@
 
 ### Added
 
+- Anthropic Messages and Bedrock Claude invoke responses preserve fixture cache usage, including the cache TTL breakdown. Record mode retains token counts and cache usage for replay.
+
 - Responses API (HTTP, SSE, WebSocket): optional `phase` response override (`commentary` | `final_answer`) on assistant message output items; validated on load (#531)
 
 ### Fixed

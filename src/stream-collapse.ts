@@ -130,15 +130,12 @@ export interface CollapseResult {
   redactedThinking?: string[];
   webSearches?: string[];
   /**
-   * The provider-reported `usage` object from the stream's final usage frame,
-   * captured VERBATIM (#368). OpenAI-compatible streams (including OpenRouter)
-   * close with a `chat.completion.chunk` whose `choices` is empty and whose
-   * `usage` carries the real token counts — plus, on OpenRouter,
-   * `cost` / `cost_details` / `native_tokens_*`. Collapsing dropped that frame,
-   * so a recorded fixture could only ever replay estimated (`ceil(len/4)`) token
-   * counts and never a provider-reported cost. Last-usage-wins: a stream that
-   * emits several usage frames keeps the final one. Absent when the upstream
-   * stream carried no usage (e.g. `stream_options.include_usage` unset).
+   * Provider-reported usage captured with each wire's merge rule. OpenAI and
+   * OpenRouter preserve the last nonempty usage object, including cost fields.
+   * Anthropic Messages and Bedrock Claude invoke merge message_start usage
+   * with numeric message_delta updates; null keeps the earlier count. Cache
+   * TTL objects come from message_start. Other wire families omit usage.
+   * Absent when no usage was captured from the upstream stream.
    *
    * Kept as a loose record because the field set is provider-specific and
    * forward-extending; the recorder sanitizes it into the fixture
@@ -1057,6 +1054,8 @@ export function collapseOpenAISSEWithResponsesTools(rawBody: string): CollapseRe
 
 /**
  * Collapse Anthropic Claude Messages SSE stream into a single response.
+ * Captures start usage and numeric delta updates; null keeps the start value.
+ * Cache TTL objects are captured from message_start, alongside flat counts.
  *
  * Format:
  *   event: message_start\ndata: {...}\n\n
@@ -1874,6 +1873,8 @@ function decodeEventStreamFrames(buf: Buffer): {
 
 /**
  * Collapse Bedrock binary Event Stream into a single response.
+ * Claude invoke events preserve usage with the Anthropic start/delta rules;
+ * Converse usage remains omitted.
  *
  * Each frame contains a JSON payload with event types like:
  *   contentBlockDelta, contentBlockStart, etc.

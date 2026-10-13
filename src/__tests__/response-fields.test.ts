@@ -103,6 +103,7 @@ const SANITIZED_USAGE = {
   cost: 0,
   future_number: 2,
   toString: 5,
+  cache_creation: { ephemeral_5m_input_tokens: 4 },
   cost_details: { upstream_inference_cost: 0, future_cost: 3 },
   prompt_tokens_details: { cached_tokens: 0, cache_write_tokens: 4, audio_tokens: 2 },
   completion_tokens_details: { reasoning_tokens: 0, future_tokens: 6 },
@@ -193,7 +194,6 @@ describe("real usage loading and recording equivalence", () => {
       [
         'override "usage.null_field" must be a number, got object',
         'override "usage.unknown_object" must be a number, got object',
-        'override "usage.cache_creation" must be a number, got object',
       ],
     ],
     [

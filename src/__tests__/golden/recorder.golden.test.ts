@@ -6,10 +6,9 @@
  *   (b) the fixture file aimock writes in record mode against a stub upstream
  *       serving that body (usage goes through `sanitizeRecordedUsage`).
  *
- * Anthropic and Bedrock results carry NO `usage` today, even though the
- * upstream bodies below report token and cache counts. Those cases are named
- * `replaced-*`: a later change that starts capturing that usage replaces
- * exactly those goldens. Every other golden must stay byte-identical.
+ * Anthropic and Bedrock results retain the upstream token and cache usage.
+ * The `replaced-*` names mark goldens replaced when usage capture was enabled.
+ * Every other golden stays byte-identical.
  */
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

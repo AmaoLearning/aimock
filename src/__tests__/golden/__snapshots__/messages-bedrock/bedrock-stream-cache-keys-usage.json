@@ -16,7 +16,7 @@
         ":message-type": "event"
       },
       "payload": "{\"bytes\":\"<base64:decodedBytes>\"}",
-      "decodedBytes": "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_<#1>\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic.claude-3-5-sonnet-20241022-v2:0\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}"
+      "decodedBytes": "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_<#1>\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"anthropic.claude-3-5-sonnet-20241022-v2:0\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"cache_read_input_tokens\":4,\"cache_creation_input_tokens\":3}}}"
     },
     {
       "headers": {
@@ -61,7 +61,7 @@
         ":message-type": "event"
       },
       "payload": "{\"bytes\":\"<base64:decodedBytes>\"}",
-      "decodedBytes": "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}"
+      "decodedBytes": "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0,\"cache_read_input_tokens\":4,\"cache_creation_input_tokens\":3}}"
     },
     {
       "headers": {

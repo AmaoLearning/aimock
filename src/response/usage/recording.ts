@@ -27,7 +27,7 @@ type CaptureMode =
   | "last-nonempty"
   | "transcription-object"
   | "sanitize"
-  | "anthropic-omit"
+  | "anthropic-merge"
   | "omit";
 
 /** Content-type precedence matches the content dispatcher, including its SSE fallback. */
@@ -65,7 +65,7 @@ function mode(
       return stage === "nonstream" ? "transcription-object" : "last-nonempty";
     case "anthropic":
     case "bedrock-invoke":
-      return "anthropic-omit";
+      return "anthropic-merge";
     // These families intentionally do not acquire usage during extraction.
     case "gemini":
     case "ollama":
@@ -105,8 +105,14 @@ export function captureUsage(
       // Nonstream transcription historically retains arrays and empty objects;
       // its discriminator contract is separate from chat fixture sanitation.
       return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : undefined;
-    case "anthropic-omit":
-      return captureAnthropicUsage(previous, observation);
+    case "anthropic-merge": {
+      if (stage !== "stream") return captureAnthropicUsage(previous, raw);
+      const event = observation as { type?: unknown; message?: { usage?: unknown } } | null;
+      if (event?.type === "message_start")
+        return captureAnthropicUsage(previous, event.message?.usage, "start");
+      if (event?.type === "message_delta") return captureAnthropicUsage(previous, raw, "delta");
+      return previous;
+    }
     case "omit":
       return undefined;
   }

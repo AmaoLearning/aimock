@@ -30,6 +30,14 @@ describe("token estimation leaf ownership", () => {
           ts.isIdentifier(statement.expression.expression) &&
           statement.expression.expression.text === owner,
       ).toBe(true);
+      if (name === "estimateTokens") {
+        const call =
+          statement && ts.isReturnStatement(statement) ? statement.expression : undefined;
+        const args = call && ts.isCallExpression(call) ? call.arguments : undefined;
+        expect(args).toHaveLength(1);
+        const argument = args?.[0];
+        expect(argument && ts.isIdentifier(argument) && argument.text === "text").toBe(true);
+      }
     }
     const leafPath = new URL("../response/usage/estimate.ts", import.meta.url);
     expect(existsSync(leafPath)).toBe(true);
@@ -53,6 +61,7 @@ describe("existing token estimates", () => {
     ["abcde", 2],
     ["abcdefgh", 2],
     ["😀😀😀", 2],
+    ["         ", 3],
   ])("preserves character estimation for %j", (text, tokens) => {
     expect(estimateTokens(text)).toBe(tokens);
   });

@@ -117,7 +117,11 @@ describe("Anthropic codec boundary", () => {
     expect(resolved.supplied).toBe(true);
     expect(resolved.native).toBe(usage);
     expect(Object.keys(resolved.native ?? {})).toEqual(Object.keys(usage));
-    expect(renderUsage(resolved, "messages-final")).toEqual({ input_tokens: 0, output_tokens: 9 });
+    expect(renderUsage(resolved, "messages-final")).toEqual({
+      input_tokens: 0,
+      output_tokens: 9,
+      cache_read_input_tokens: 3,
+    });
     expect(resolveUsage().supplied).toBe(false);
     expect(resolveUsage().native).toBeUndefined();
   });
@@ -136,7 +140,10 @@ describe("Anthropic codec boundary", () => {
     expect(renderUsage(resolved, "bedrock-delta", "applied-misbehavior")).toEqual({
       output_tokens: 6,
     });
-    expect(captureUsage(resolved.native, { input_tokens: 12 })).toBeUndefined();
+    expect(captureUsage(resolved.native, { input_tokens: 12 })).toEqual({
+      input_tokens: 12,
+      output_tokens: 77,
+    });
   });
 });
 
@@ -260,14 +267,19 @@ describe("actual Anthropic usage and finish equivalence", () => {
           expect(got.tail).toBeUndefined();
           const input = usage === "conflicts" ? 6 : usage === "null-members" ? 4 : 0;
           const output = usage === "conflicts" ? 9 : usage === "null-members" ? 8 : 0;
+          const cache =
+            usage === "conflicts"
+              ? ',\\"cache_read_input_tokens\\":3,\\"cache_creation_input_tokens\\":2'
+              : "";
           const bytes = serializeGolden(got);
           expect(bytes).toContain(
-            `\\"usage\\":{\\"input_tokens\\":${input},\\"output_tokens\\":${output}}`,
+            `\\"usage\\":{\\"input_tokens\\":${input},\\"output_tokens\\":${output}${cache}}`,
           );
-          expect(bytes).not.toContain("cache_read_input_tokens");
+          if (usage !== "conflicts") expect(bytes).not.toContain("cache_read_input_tokens");
+          expect(bytes).not.toContain('\\"cache_creation\\":');
           if (wire.endsWith("-stream"))
             expect(bytes).toContain(
-              `\\"usage\\":{\\"output_tokens\\":${wire === "bedrock-stream" ? 0 : output}}`,
+              `\\"usage\\":{\\"output_tokens\\":${wire === "bedrock-stream" ? 0 : output}${cache}}`,
             );
           evidence(`${wire}-${shape}-${usage}`, got);
         });

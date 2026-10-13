@@ -543,13 +543,13 @@ describe("response.usage validation: every shape and its exact message", () => {
     expect(usageIssues(usage)).toEqual([]);
   });
 
-  it("object cache_creation is an error today", () => {
+  it("object cache_creation loads clean", () => {
     expect(
       usageIssues({
         input_tokens: 10,
         cache_creation: { ephemeral_5m_input_tokens: 7, ephemeral_1h_input_tokens: 0 },
       }),
-    ).toEqual([["error", 'override "usage.cache_creation" must be a number, got object']]);
+    ).toEqual([]);
   });
 
   it.each<[string, unknown, string[]]>([
@@ -625,10 +625,9 @@ describe("recorder sanitizer output always passes the validator", () => {
       { input_tokens: 10, cache_creation: 7 },
     ],
     [
-      // Today an object cache_creation is dropped (it would not load).
       "object cache_creation",
       { input_tokens: 10, cache_creation: { ephemeral_5m_input_tokens: 7 } },
-      { input_tokens: 10 },
+      { input_tokens: 10, cache_creation: { ephemeral_5m_input_tokens: 7 } },
     ],
     [
       "Anthropic cache scalars",
@@ -656,7 +655,11 @@ describe("recorder sanitizer output always passes the validator", () => {
       { server_tool_use: { web_search_requests: 1 }, output_tokens: 1 },
       { output_tokens: 1 },
     ],
-    ["nothing survives", { input_tokens: "10", cache_creation: { a: 1 } }, undefined],
+    [
+      "finite unknown cache object member survives",
+      { input_tokens: "10", cache_creation: { a: 1 } },
+      { cache_creation: { a: 1 } },
+    ],
   ];
 
   // Every row asserts both the exact output and that it loads, so no row can

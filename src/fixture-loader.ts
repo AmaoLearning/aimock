@@ -1395,12 +1395,13 @@ export function validateFixtures(
               const val = (r.usage as Record<string, unknown>)[key];
               if (val === undefined) continue;
               const definition = getUsageFieldDefinition(key);
-              if (definition.kind === "object") {
+              if (definition.kind === "number-or-object" && typeof val === "number") continue;
+              if (definition.kind === "object" || definition.kind === "number-or-object") {
                 if (typeof val !== "object" || val === null || Array.isArray(val)) {
                   results.push({
                     severity: "error",
                     fixtureIndex: i,
-                    message: `override "usage.${key}" must be an object, got ${
+                    message: `override "usage.${key}" must be ${definition.kind === "number-or-object" ? "a number or object" : "an object"}, got ${
                       Array.isArray(val) ? "array" : typeof val
                     }`,
                   });

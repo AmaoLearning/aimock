@@ -139,6 +139,28 @@
           <li><code>message_stop</code></li>
         </ol>
 
+        <h2>Cache Usage</h2>
+        <p>
+          Set <code>response.usage.cache_read_input_tokens</code> and
+          <code>cache_creation_input_tokens</code> in a fixture to emit cache counts on Messages and
+          Bedrock Claude invoke responses. Both fields appear in final responses,
+          <code>message_start</code>, and <code>message_delta</code> when supplied.
+        </p>
+        <p>
+          The optional <code>cache_creation</code> object accepts
+          <code>ephemeral_5m_input_tokens</code> and <code>ephemeral_1h_input_tokens</code>. It
+          appears in final responses and <code>message_start</code>; omitted members render as zero.
+          Numeric <code>cache_creation</code> values remain accepted without being emitted.
+          Unrecognized usage fields are omitted on these responses.
+        </p>
+        <p>
+          Messages deltas use the fixture output count. Bedrock invoke deltas retain their zero
+          output count. Applied misbehavior uses estimated token counts and omits fixture cache
+          fields. Record mode retains upstream token and cache counts. Numeric delta counts replace
+          start counts; null values keep the earlier count. The resulting fixtures replay the
+          captured usage.
+        </p>
+
         <h2>Request Translation</h2>
         <p>
           aimock internally translates Anthropic requests to a unified format for fixture matching.

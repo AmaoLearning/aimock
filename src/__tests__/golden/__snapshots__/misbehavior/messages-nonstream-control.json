@@ -8,5 +8,5 @@
     "content-type": "application/json",
     "x-request-id": "req-<#0>"
   },
-  "body": "{\"id\":\"msg_<#1>\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Before\"},{\"type\":\"tool_use\",\"id\":\"toolu_fixed_1\",\"name\":\"lookup\",\"input\":{\"city\":\"Paris\"}}],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":7}}"
+  "body": "{\"id\":\"msg_<#1>\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Before\"},{\"type\":\"tool_use\",\"id\":\"toolu_fixed_1\",\"name\":\"lookup\",\"input\":{\"city\":\"Paris\"}}],\"model\":\"claude-sonnet-4-20250514\",\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":11,\"output_tokens\":7,\"cache_read_input_tokens\":4,\"cache_creation_input_tokens\":3}}"
 }

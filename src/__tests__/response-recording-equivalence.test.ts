@@ -405,14 +405,14 @@ async function record(c: Case, inspectFile?: (path: string) => void) {
 }
 
 describe("actual collapse preservation matrix", () => {
-  // These outcomes match the pre-refactor U2 captures, including null and empty content.
+  // F1 adds Anthropic/Invoke usage capture; unrelated U2 outcomes remain unchanged.
   const expected = new Map<string, ReturnType<typeof collapseStreamingResponse>>([
     ["openai-last-nonempty", { content: "Hello", usage }],
-    ["anthropic-omit", { content: "Hello" }],
+    ["anthropic-omit", { content: "Hello", usage: { input_tokens: 12, output_tokens: 5 } }],
     ["gemini-omit", { content: "Hello" }],
     ["ollama-omit", { content: "Hello" }],
     ["cohere-omit", { content: "Hello" }],
-    ["invoke-omit", { content: "Hello" }],
+    ["invoke-omit", { content: "Hello", usage: { input_tokens: 12, output_tokens: 5 } }],
     ["converse-omit", { content: "Hello" }],
     ["interactions-omit", { content: "Hello" }],
     [
@@ -427,7 +427,7 @@ describe("actual collapse preservation matrix", () => {
     ["sse-unknown-fallback", { content: "Hello", usage }],
     ["sse-mismatched-body", { content: "" }],
     ["nonstream-contenttype", null],
-    ["bedrock-sse-invoke", { content: "Hello" }],
+    ["bedrock-sse-invoke", { content: "Hello", usage: { input_tokens: 12, output_tokens: 5 } }],
   ]);
   it.each(streamCases)("$id", (c) => {
     const result = assertCapture(
@@ -456,6 +456,13 @@ describe("actual record-mode preservation matrix", () => {
         cost: 0.002,
         is_byok: false,
         prompt_tokens_details: { cached_tokens: 0 },
+      });
+    } else if (id === "anthropic") {
+      expect(response.usage).toEqual({
+        prompt_tokens: 12,
+        completion_tokens: 5,
+        total_tokens: 17,
+        cost: 0.002,
       });
     } else expect(response.usage).toBeUndefined();
     if (id === "transcription-markers" || id === "transcription-array-legacy") {
@@ -486,12 +493,34 @@ describe("actual record-mode preservation matrix", () => {
           }
         }
       : undefined;
-    await record({ ...c, id: `stream-${c.id}`, provider: "openai" }, inspectFile);
+    const file = await record({ ...c, id: `stream-${c.id}`, provider: "openai" }, inspectFile);
+    if (c.id === "openai-last-nonempty") {
+      const response = file.fixtures[0]!.response as Record<string, unknown>;
+      expect(response.usage).toEqual({
+        prompt_tokens: 12,
+        completion_tokens: 5,
+        total_tokens: 17,
+        cost: 0.002,
+        is_byok: false,
+        prompt_tokens_details: { cached_tokens: 0 },
+      });
+    }
   });
   it.each(streamCases.slice(0, 8))("native stream $id", async (c) => {
     const file = await record(nativeRoute(c));
     const response = file.fixtures[0]!.response as Record<string, unknown>;
-    if (c.id !== "openai-last-nonempty") expect(response.usage).toBeUndefined();
+    if (c.id === "openai-last-nonempty") {
+      expect(response.usage).toEqual({
+        prompt_tokens: 12,
+        completion_tokens: 5,
+        total_tokens: 17,
+        cost: 0.002,
+        is_byok: false,
+        prompt_tokens_details: { cached_tokens: 0 },
+      });
+    } else if (["anthropic-omit", "invoke-omit"].includes(c.id))
+      expect(response.usage).toEqual({ input_tokens: 12, output_tokens: 5 });
+    else expect(response.usage).toBeUndefined();
     expect(response.content).toBe("Hello");
   });
   it.each(["transcriptions", "translations"])("transcription operation %s", async (operation) => {
