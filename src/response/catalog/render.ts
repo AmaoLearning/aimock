@@ -1,3 +1,6 @@
+import type { AnthropicCatalogPage } from "./anthropic-page.js";
+import type { GeminiCatalogPage } from "./gemini-page.js";
+
 const DEFAULT_MODELS = [
   "gpt-4",
   "gpt-4o",
@@ -5,6 +8,59 @@ const DEFAULT_MODELS = [
   "gemini-2.0-flash",
   "text-embedding-3-small",
 ];
+
+/** The core fallback is shared by list and detail visibility. */
+export function coreModelIds(ids: readonly string[]): readonly string[] {
+  return ids.length > 0 ? ids : DEFAULT_MODELS;
+}
+
+export function renderOpenAIModel(id: string) {
+  return { id, object: "model" as const, created: 1686935002, owned_by: "aimock" };
+}
+
+export function renderAnthropicModel(id: string) {
+  return {
+    type: "model" as const,
+    id,
+    display_name: id,
+    created_at: "1970-01-01T00:00:00Z",
+    capabilities: null,
+    lifecycle: "active" as const,
+    line: null,
+    max_input_tokens: null,
+    max_tokens: null,
+    deprecated_at: null,
+    retires_at: null,
+  };
+}
+
+export function renderAnthropicModels(page: AnthropicCatalogPage) {
+  return {
+    data: page.ids.map(renderAnthropicModel),
+    has_more: page.hasMore,
+    first_id: page.firstId,
+    last_id: page.lastId,
+  };
+}
+
+export function renderGeminiModel(id: string) {
+  return {
+    name: `models/${id}`,
+    baseModelId: id,
+    version: "1",
+    displayName: id,
+    inputTokenLimit: 128000,
+    outputTokenLimit: 8192,
+    supportedGenerationMethods: ["generateContent", "countTokens"],
+  };
+}
+
+export function renderGeminiModels(page: GeminiCatalogPage) {
+  return {
+    models: page.ids.map(renderGeminiModel),
+    ...(page.nextPageToken === undefined ? {} : { nextPageToken: page.nextPageToken }),
+  };
+}
 
 const DEFAULT_OPENROUTER_MODELS = [
   "openai/gpt-4o",
@@ -19,12 +75,7 @@ const DEFAULT_OPENROUTER_VIDEO_MODELS = [DEFAULT_OPENROUTER_VIDEO_MODEL];
 export function renderOpenAIModels(ids: readonly string[]) {
   return {
     object: "list" as const,
-    data: (ids.length > 0 ? ids : DEFAULT_MODELS).map((id) => ({
-      id,
-      object: "model" as const,
-      created: 1686935002,
-      owned_by: "aimock",
-    })),
+    data: coreModelIds(ids).map(renderOpenAIModel),
   };
 }
 

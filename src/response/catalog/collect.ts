@@ -1,4 +1,36 @@
 import type { Fixture } from "../../types.js";
+import { stripProviderPrefix } from "../../model-utils.js";
+
+export type ModelProvider = "anthropic" | "openai" | "google";
+
+const MODEL_PREFIXES: readonly { provider: ModelProvider; pattern: RegExp }[] = [
+  { provider: "anthropic", pattern: /^claude-/ },
+  { provider: "google", pattern: /^gemini-/ },
+  {
+    provider: "openai",
+    pattern: /^(?:gpt-|chatgpt-|o[134](?:$|-)|text-embedding-|dall-e-|whisper-|tts-)/,
+  },
+];
+
+/** Explicit provider segments win; unknown families remain visible everywhere. */
+export function providerOf(id: string): ModelProvider | undefined {
+  const normalized = id.toLowerCase();
+  const provider = normalized.split("/", 1)[0];
+  if (
+    normalized.includes("/") &&
+    (provider === "anthropic" || provider === "openai" || provider === "google")
+  )
+    return provider;
+  const family = stripProviderPrefix(normalized);
+  return MODEL_PREFIXES.find(({ pattern }) => pattern.test(family))?.provider;
+}
+
+export function idsFor(ids: readonly string[], provider: "anthropic" | "google"): string[] {
+  return ids.filter((id) => {
+    const actual = providerOf(id);
+    return actual === undefined || actual === provider;
+  });
+}
 
 export type CatalogSelection = "all" | "chat" | "video-active";
 

@@ -69,6 +69,26 @@
           <li>Subsequent identical requests match the newly recorded fixture</li>
         </ol>
 
+        <h2 id="catalog-and-count-routes">Catalog and Count Routes</h2>
+        <p>
+          Native model catalogs and token-count routes always answer locally, including in record
+          and proxy-only modes. They never contact upstream providers or save recordings. Catalog
+          GETs do not create journal entries. Count POSTs create entries with
+          <code>source: "internal"</code> and <code>fixture: null</code>.
+        </p>
+        <p>
+          Count routes estimate the translated request, including system text and converted tools.
+          They do not read fixture usage or count-specific fixtures. The estimate can differ from
+          the usage on a replayed response. To make those values agree, set the response usage in
+          the fixture explicitly.
+        </p>
+        <p>
+          Native catalogs use provider paging by default. Clients must read
+          <code>has_more</code> or <code>nextPageToken</code> to collect all pages. See the
+          <a href="/claude-messages#model-catalog">Claude catalog and count routes</a> and
+          <a href="/gemini#model-catalog">Gemini catalog and count routes</a>.
+        </p>
+
         <h2>Proxy-Only Mode</h2>
         <p>
           Use <code>--proxy-only</code> instead of <code>--record</code> when you want unmatched

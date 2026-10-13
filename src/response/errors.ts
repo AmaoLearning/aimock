@@ -13,6 +13,7 @@ export type ErrorPurpose =
   | "route-failure"
   | "stream-failure"
   | "invalid-misbehavior-header"
+  | "authentication"
   | "legacy-auth";
 
 export interface ErrorDetails {
@@ -62,6 +63,23 @@ export function renderError(
     };
   }
   switch (purpose) {
+    case "authentication":
+      if (wire === "messages") {
+        return {
+          body: JSON.stringify({
+            type: "error",
+            error: { type: "authentication_error", message: details.message },
+          }),
+        };
+      }
+      if (wire === "gemini") {
+        return {
+          body: JSON.stringify({
+            error: { code: 401, message: details.message, status: "UNAUTHENTICATED" },
+          }),
+        };
+      }
+      return renderError(wire, "legacy-auth", details);
     case "legacy-auth":
       return {
         body: JSON.stringify({

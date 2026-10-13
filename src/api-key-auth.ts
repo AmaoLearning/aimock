@@ -1,8 +1,9 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type * as http from "node:http";
 import type * as net from "node:net";
 import type { ApiKeyAuthConfig } from "./types.js";
 import { renderError } from "./response/errors.js";
+import { authErrorDialectForPath } from "./response/profiles.js";
 
 export const INBOUND_API_KEY_HEADERS = [
   "authorization",
@@ -159,14 +160,20 @@ export function isAuthenticatedRequest(req: http.IncomingMessage): boolean {
 export function writeApiKeyHttpRejection(
   res: http.ServerResponse,
   setCorsHeaders: (res: http.ServerResponse) => void,
+  pathname = "",
 ): void {
   setCorsHeaders(res);
+  const dialect = authErrorDialectForPath(pathname);
+  const rendered = renderError(dialect, "authentication", { message: "Invalid API key" });
   res.writeHead(401, {
     "Content-Type": "application/json",
-    "Content-Length": Buffer.byteLength(API_KEY_ERROR_BODY),
+    "Content-Length": Buffer.byteLength(rendered.body),
     "WWW-Authenticate": 'Bearer realm="aimock"',
+    ...(dialect === "messages"
+      ? { "request-id": `req_${randomBytes(12).toString("base64url")}` }
+      : {}),
   });
-  res.end(API_KEY_ERROR_BODY);
+  res.end(rendered.body);
 }
 
 export function writeApiKeyUpgradeRejection(socket: net.Socket): void {

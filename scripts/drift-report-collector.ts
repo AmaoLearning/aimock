@@ -25,10 +25,24 @@
 
 import { discoverAgUiSources, resolveAgUiRepo } from "./drift-agui-canonical.js";
 import { execSync, execFileSync, spawnSync } from "node:child_process";
-import { existsSync, statSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
-import { resolve, relative, isAbsolute, sep, dirname } from "node:path";
+import {
+  existsSync,
+  statSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  lstatSync,
+  readlinkSync,
+  realpathSync,
+  openSync,
+  closeSync,
+  fstatSync,
+  unlinkSync,
+} from "node:fs";
+import { resolve, relative, isAbsolute, sep, dirname, basename } from "node:path";
 import { createRequire } from "node:module";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { stripVTControlCharacters } from "node:util";
 import { fileURLToPath } from "node:url";
 import { MAX_EVIDENCE_RECORD_BYTES } from "./drift-evidence-reporter.js";
@@ -36,6 +50,10 @@ import type { EvidenceReporterRecord } from "./drift-evidence-reporter.js";
 
 import { SURFACE_REGISTRY, isKnownSurface } from "../src/__tests__/drift/surface-registry.js";
 import type { SurfaceMapping } from "../src/__tests__/drift/surface-registry.js";
+import {
+  parseLiveObservation,
+  type LiveObservation,
+} from "../src/__tests__/drift/live-observations.js";
 
 import type {
   DriftEntry,
@@ -199,6 +217,9 @@ interface LegEvidence {
 
 // Raw content exists only in memory, never as a property serialized into evidence.
 const reporterChannels = new WeakMap<LegEvidence, EvidenceReporterRecord[]>();
+const liveObservations = new WeakMap<LegEvidence, LiveObservation[]>();
+const observationRejections = new WeakSet<LegEvidence>();
+const observationUnavailability = new WeakSet<LegEvidence>();
 
 function parseEvidenceRecord(line: string): EvidenceReporterRecord | null {
   if (Buffer.byteLength(line) > MAX_EVIDENCE_RECORD_BYTES) return null;
@@ -954,6 +975,33 @@ function responsesWSObservations(
 function captureAssertionEvidence(leg: LegEvidence | undefined, result: VitestJsonResult) {
   if (!leg) return;
   const contexts = bindReporterContext(leg, result);
+  if (
+    result.testResults.some((file) =>
+      file.assertionResults.some(
+        (assertion) => ["passed", "failed"].includes(assertion.status) && !contexts.has(assertion),
+      ),
+    )
+  ) {
+    // Unavailable assertion stdout cannot establish a complete observation artifact.
+    observationUnavailability.add(leg);
+  }
+  const collected: LiveObservation[] = [];
+  for (const [assertion, messages] of contexts) {
+    if (!["passed", "failed"].includes(assertion.status)) continue;
+    for (const message of messages) {
+      if (message.stream !== "stdout") continue;
+      for (const line of message.content.split("\n")) {
+        try {
+          const observation = parseLiveObservation(line);
+          if (observation) collected.push(observation);
+        } catch {
+          // Defer only this new channel's rejection until the independent report is persisted.
+          observationRejections.add(leg);
+        }
+      }
+    }
+  }
+  liveObservations.set(leg, collected);
   leg.assertions = result.testResults.flatMap((file) => {
     const name = evidenceFileName(file.name);
     return file.assertionResults.map((assertion): AssertionEvidence => {
@@ -3003,12 +3051,130 @@ export function collectUnverifiedSurfaces(results?: VitestJsonResult): Unverifie
   return surfaces.sort((a, b) => a.surface.localeCompare(b.surface));
 }
 
+function artifactTargetPath(path: string): string {
+  const entry = lstatSync(path, { throwIfNoEntry: false });
+  if (!entry) return resolve(artifactTargetPath(dirname(path)), basename(path));
+  if (entry.isSymbolicLink()) return artifactTargetPath(resolve(dirname(path), readlinkSync(path)));
+  return realpathSync(path);
+}
+
+function caseAliasProbeNames(first: string, second: string) {
+  const token = randomBytes(16).toString("hex");
+  let firstProbe = "";
+  let secondProbe = "";
+  for (let index = 0; index < first.length; index++) {
+    const firstLetter = first.charAt(index);
+    const secondLetter = second.charAt(index);
+    if (!/[a-z]/i.test(firstLetter)) {
+      firstProbe += firstLetter;
+      secondProbe += secondLetter;
+      continue;
+    }
+    const replacement = String.fromCharCode(
+      97 + Number.parseInt(token.charAt(index % token.length), 16),
+    );
+    firstProbe +=
+      firstLetter === firstLetter.toUpperCase() ? replacement.toUpperCase() : replacement;
+    secondProbe +=
+      secondLetter === secondLetter.toUpperCase() ? replacement.toUpperCase() : replacement;
+  }
+  return [firstProbe, secondProbe] as const;
+}
+
+function artifactCaseAliases(parent: string, first: string, second: string): boolean {
+  for (let attempt = 0; attempt < 32; attempt++) {
+    // Preserve the full ASCII case relation and byte length without adding a
+    // prefix that could exceed an otherwise valid destination's capacity.
+    const [firstProbe, secondProbe] = caseAliasProbeNames(first, second);
+    if ([first.toLowerCase(), second.toLowerCase()].includes(firstProbe.toLowerCase())) continue;
+    const probePath = resolve(parent, firstProbe);
+    let descriptor: number;
+    try {
+      descriptor = openSync(probePath, "wx");
+    } catch (err) {
+      if (typeof err === "object" && err !== null && "code" in err && err.code === "EEXIST")
+        continue;
+      throw err;
+    }
+
+    // The returned descriptor proves exclusive acquisition. Close and unlink
+    // are independent so a close failure cannot leave the owned entry behind.
+    const failures: { operation: string; error: unknown }[] = [];
+    let aliases = false;
+    try {
+      const owned = fstatSync(descriptor);
+      const alternate = lstatSync(resolve(parent, secondProbe), { throwIfNoEntry: false });
+      aliases = owned.dev === alternate?.dev && owned.ino === alternate?.ino;
+    } catch (err) {
+      failures.push({ operation: "lookup", error: err });
+    } finally {
+      try {
+        closeSync(descriptor);
+      } catch (err) {
+        failures.push({ operation: "close", error: err });
+      }
+      try {
+        unlinkSync(probePath);
+      } catch (err) {
+        failures.push({ operation: "unlink", error: err });
+      }
+    }
+    if (failures.length === 1) throw failures[0].error;
+    if (failures.length > 1) {
+      const details = failures.map(({ operation, error }) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const code =
+          typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+        return `${operation}: ${message}${typeof code === "string" ? ` (${code})` : ""}`;
+      });
+      throw new AggregateError(
+        failures.map(({ error }) => error),
+        `Could not compare artifact case aliases: ${details.join("; ")}`,
+      );
+    }
+    return aliases;
+  }
+  throw new Error("Could not acquire a temporary entry to compare artifact case aliases");
+}
+
+function artifactDestinationsAlias(first: string, second: string): boolean {
+  const firstTarget = artifactTargetPath(first);
+  const secondTarget = artifactTargetPath(second);
+  if (firstTarget === secondTarget) return true;
+  const firstName = basename(firstTarget);
+  const secondName = basename(secondTarget);
+  const sameName = firstName === secondName;
+  if (
+    !sameName &&
+    firstName.replace(/[A-Z]/g, (letter) => letter.toLowerCase()) !==
+      secondName.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+  )
+    return false;
+  const firstParent = statSync(dirname(firstTarget), { throwIfNoEntry: false });
+  const secondParent = statSync(dirname(secondTarget), { throwIfNoEntry: false });
+  if (!firstParent?.isDirectory() || !secondParent?.isDirectory()) return false;
+  if (firstParent.dev !== secondParent.dev || firstParent.ino !== secondParent.ino) return false;
+  return sameName || artifactCaseAliases(dirname(firstTarget), firstName, secondName);
+}
+
 function collectMain(evidence: { drift: LegEvidence; agui: LegEvidence }): number {
   const args = process.argv.slice(2);
   const outIndex = args.indexOf("--out");
   const outPath = resolve(
     outIndex !== -1 && args[outIndex + 1] ? args[outIndex + 1] : "drift-report.json",
   );
+  const observationsIndex = args.indexOf("--observations-out");
+  const observationsPath = resolve(
+    observationsIndex !== -1 && args[observationsIndex + 1]
+      ? args[observationsIndex + 1]
+      : "drift-observations.json",
+  );
+  if (outPath === observationsPath || artifactDestinationsAlias(outPath, observationsPath)) {
+    throw new Error("--out and --observations-out must resolve to different paths");
+  }
+
+  // This invocation owns the sidecar even if startup or collection fails early.
+  rmSync(observationsPath, { force: true });
 
   // Collect HTTP API drift entries
   console.log("Running HTTP API drift tests...");
@@ -3048,6 +3214,10 @@ function collectMain(evidence: { drift: LegEvidence; agui: LegEvidence }): numbe
   const exitCode = computeExitCode(criticalCount, quarantineCount, agUiSkipped, timeoutCount);
 
   const unverifiedSurfaces = collectUnverifiedSurfaces(httpResults);
+  const observationRejected =
+    observationRejections.has(evidence.drift) || observationRejections.has(evidence.agui);
+  const observationUnavailable =
+    observationUnavailability.has(evidence.drift) || observationUnavailability.has(evidence.agui);
 
   const timestamp = new Date().toISOString();
   const report: DriftReport = {
@@ -3066,6 +3236,24 @@ function collectMain(evidence: { drift: LegEvidence; agui: LegEvidence }): numbe
 
   try {
     writeFileSync(outPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
+    if (observationRejected || observationUnavailable) {
+      // Do not upload a stale or apparently complete artifact for a rejected invocation.
+      rmSync(observationsPath, { force: true });
+    } else {
+      writeFileSync(
+        observationsPath,
+        JSON.stringify(
+          {
+            schemaVersion: 1,
+            generatedAt: timestamp,
+            observations: liveObservations.get(evidence.drift) ?? [],
+          },
+          null,
+          2,
+        ) + "\n",
+        { mode: 0o600 },
+      );
+    }
   } catch (err) {
     console.error(`Failed to write drift report to ${outPath}:`, err);
     console.log(JSON.stringify(report, null, 2));
@@ -3091,6 +3279,16 @@ function collectMain(evidence: { drift: LegEvidence; agui: LegEvidence }): numbe
     for (const entry of unverifiedSurfaces) {
       console.log(`    - ${entry.surface} (${entry.provider})`);
     }
+  }
+
+  if (observationRejected) {
+    console.error("Invalid or unsafe live observation; observation artifact was not written.");
+    return 1;
+  }
+  if (observationUnavailable) {
+    console.error("Live observation evidence unavailable; observation artifact was not written.");
+    // Preserve existing failing ShapeDiff/infra grading; a clean report cannot certify this channel.
+    if (exitCode === 0) return 1;
   }
 
   switch (exitCode) {

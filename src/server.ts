@@ -110,8 +110,20 @@ import {
   describeMatch,
 } from "./helpers.js";
 import { DEFAULT_TEST_ID } from "./constants.js";
-import { collect } from "./response/catalog/collect.js";
-import { renderOpenAIModels, renderOllamaTags } from "./response/catalog/render.js";
+import { collect, idsFor } from "./response/catalog/collect.js";
+import { anthropicPage } from "./response/catalog/anthropic-page.js";
+import { geminiPage } from "./response/catalog/gemini-page.js";
+import { isAnthropicModelRequest } from "./response/profiles.js";
+import {
+  coreModelIds,
+  renderOpenAIModel,
+  renderOpenAIModels,
+  renderAnthropicModel,
+  renderAnthropicModels,
+  renderGeminiModel,
+  renderGeminiModels,
+  renderOllamaTags,
+} from "./response/catalog/render.js";
 import { renderError } from "./response/errors.js";
 import {
   isOpenRouterPath,
@@ -133,6 +145,7 @@ import type {
 } from "./types.js";
 import { handleResponses } from "./responses.js";
 import { handleMessages } from "./messages.js";
+import { handleCountTokens } from "./count-tokens.js";
 import { handleGemini } from "./gemini.js";
 import { handleGeminiEmbedContent } from "./gemini-embeddings.js";
 import { handleBedrock, handleBedrockStream } from "./bedrock.js";
@@ -257,6 +270,7 @@ import {
   LIVE_PATH,
   GEMINI_LIVE_PATH,
   MESSAGES_PATH,
+  MESSAGES_COUNT_PATH,
   EMBEDDINGS_PATH,
   COHERE_CHAT_PATH,
   COHERE_EMBED_PATH,
@@ -287,6 +301,7 @@ import {
   FAL_ROUTE_RE,
   GEMINI_INTERACTIONS_PATH,
   GEMINI_PATH_RE,
+  GEMINI_COUNT_RE,
   GEMINI_EMBED_RE,
   AZURE_DEPLOYMENT_RE,
   BEDROCK_INVOKE_RE,
@@ -310,6 +325,9 @@ import {
   READY_PATH,
   METRICS_PATH,
   MODELS_PATH,
+  MODELS_DETAIL_RE,
+  GEMINI_MODELS_PATH,
+  GEMINI_MODEL_DETAIL_RE,
   REQUESTS_PATH,
   FILES_PATH,
   FILES_ID_RE,
@@ -3682,7 +3700,7 @@ async function startServer(
       (pathname === HEALTH_PATH || pathname === READY_PATH || pathname === METRICS_PATH);
     if (!isPublicProbe) {
       if (!validateRequestApiKey(req, resolvedAuth.policy).ok) {
-        writeApiKeyHttpRejection(res, setCorsHeaders);
+        writeApiKeyHttpRejection(res, setCorsHeaders, pathname);
         return;
       }
       markAuthenticatedRequest(req, resolvedAuth.policy);
@@ -4008,10 +4026,73 @@ async function startServer(
       return;
     }
 
-    // Models listing
-    if (pathname === MODELS_PATH && req.method === "GET") {
+    // Catalog GETs are synthesized in every mode, without journal or egress.
+    const modelDetailMatch = pathname.match(MODELS_DETAIL_RE);
+    const geminiModelDetailMatch = pathname.match(GEMINI_MODEL_DETAIL_RE);
+    if (
+      req.method === "GET" &&
+      (pathname === MODELS_PATH ||
+        pathname === GEMINI_MODELS_PATH ||
+        modelDetailMatch ||
+        geminiModelDetailMatch)
+    ) {
       setCorsHeaders(res);
-      const body = renderOpenAIModels(collect(fixtures, "all").ids);
+      const google = pathname === GEMINI_MODELS_PATH || geminiModelDetailMatch !== null;
+      const anthropic = !google && isAnthropicModelRequest(req.headers);
+      const ids = coreModelIds(collect(fixtures, "all").ids);
+      const visible = google ? idsFor(ids, "google") : anthropic ? idsFor(ids, "anthropic") : ids;
+      const catalogError = (status: number, message: string): void => {
+        const rendered = google
+          ? renderError("gemini", "fixture", {
+              bodyCode: status,
+              status: status === 404 ? "NOT_FOUND" : "INVALID_ARGUMENT",
+              message,
+            })
+          : anthropic
+            ? renderError("messages", "thinking", {
+                type: status === 404 ? "not_found_error" : "invalid_request_error",
+                message,
+              })
+            : renderError("openai", "validation", { message });
+        res.writeHead(status, { "Content-Type": "application/json", ...rendered.headers });
+        res.end(rendered.body);
+      };
+      let body: unknown;
+      const detail = modelDetailMatch ?? geminiModelDetailMatch;
+      if (detail) {
+        let id: string;
+        try {
+          id = decodeURIComponent(detail[1]);
+        } catch {
+          catalogError(404, "Model not found");
+          return;
+        }
+        if (!visible.includes(id)) {
+          catalogError(404, `Model not found: ${id}`);
+          return;
+        }
+        body = google
+          ? renderGeminiModel(id)
+          : anthropic
+            ? renderAnthropicModel(id)
+            : renderOpenAIModel(id);
+      } else if (google) {
+        const result = geminiPage(visible, parsedUrl.searchParams);
+        if (result.error !== undefined) {
+          catalogError(400, result.error);
+          return;
+        }
+        body = renderGeminiModels(result.page);
+      } else if (anthropic) {
+        const result = anthropicPage(visible, parsedUrl.searchParams);
+        if (result.error !== undefined) {
+          catalogError(400, result.error);
+          return;
+        }
+        body = renderAnthropicModels(result.page);
+      } else {
+        body = renderOpenAIModels(ids);
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(body));
       return;
@@ -4475,6 +4556,40 @@ async function startServer(
         routeError(req, res, err, pathname, {
           streamEvent: (m) =>
             `event: error\ndata: ${renderError("openai", "stream-failure", { message: m }).body}\n\n`,
+        });
+      }
+      return;
+    }
+
+    // Counts are synthesized before generation dispatch in every mode.
+    const geminiCountMatch = pathname.match(GEMINI_COUNT_RE);
+    if (req.method === "POST" && (pathname === MESSAGES_COUNT_PATH || geminiCountMatch)) {
+      const google = geminiCountMatch !== null;
+      try {
+        const raw = await readBody(req);
+        handleCountTokens(
+          req,
+          res,
+          raw,
+          google,
+          geminiCountMatch?.[1] ?? "",
+          journal,
+          setCorsHeaders,
+        );
+      } catch (err: unknown) {
+        routeError(req, res, err, pathname, {
+          service: google ? "gemini" : "anthropic",
+          envelope: (message, status) =>
+            google
+              ? renderError("gemini", "fixture", {
+                  message,
+                  bodyCode: status,
+                  status: status === 400 ? "INVALID_ARGUMENT" : "INTERNAL",
+                }).body
+              : renderError("messages", "thinking", {
+                  message,
+                  type: status === 400 ? "invalid_request_error" : "api_error",
+                }).body,
         });
       }
       return;

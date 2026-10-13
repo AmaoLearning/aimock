@@ -102,11 +102,15 @@ describe("core catalog source ownership", () => {
       const collector = importedSymbol("./response/catalog/collect.js", "collect");
       const renderSymbol = importedSymbol("./response/catalog/render.js", renderer);
       const blocks: ts.Block[] = [];
+      const condition =
+        route === "MODELS_PATH"
+          ? 'req.method === "GET" && (pathname === MODELS_PATH || pathname === GEMINI_MODELS_PATH || modelDetailMatch || geminiModelDetailMatch)'
+          : `pathname === ${route} && req.method === "GET"`;
       function findRoute(node: ts.Node): void {
         if (
           ts.isIfStatement(node) &&
           ts.isBlock(node.thenStatement) &&
-          node.expression.getText(source) === `pathname === ${route} && req.method === "GET"`
+          node.expression.getText(source).replace(/\s+/g, " ") === condition
         )
           blocks.push(node.thenStatement);
         ts.forEachChild(node, findRoute);
@@ -117,9 +121,48 @@ describe("core catalog source ownership", () => {
       const declarations = block.statements.flatMap((statement) =>
         ts.isVariableStatement(statement) ? [...statement.declarationList.declarations] : [],
       );
-      expect(declarations).toHaveLength(1);
-      const body = declarations[0];
-      const renderCall = body.initializer;
+      let body: ts.VariableDeclaration;
+      let renderExpression: ts.Expression | undefined;
+      let renderingBlock = block;
+      if (route === "MODELS_PATH") {
+        const bodyDeclaration = declarations.find((node) => node.name.getText(source) === "body");
+        if (!bodyDeclaration) throw new Error("Catalog body declaration is missing");
+        body = bodyDeclaration;
+        expect(body.initializer).toBeUndefined();
+        const detailBranch = block.statements.find(
+          (node): node is ts.IfStatement =>
+            ts.isIfStatement(node) && node.expression.getText(source) === "detail",
+        );
+        const googleBranch = detailBranch?.elseStatement;
+        if (!googleBranch || !ts.isIfStatement(googleBranch))
+          throw new Error("Catalog list must follow the detail branch");
+        expect(googleBranch.expression.getText(source)).toBe("google");
+        const anthropicBranch = googleBranch.elseStatement;
+        if (!anthropicBranch || !ts.isIfStatement(anthropicBranch))
+          throw new Error("OpenAI list must follow native provider lists");
+        expect(anthropicBranch.expression.getText(source)).toBe("anthropic");
+        const openaiBranch = anthropicBranch.elseStatement;
+        if (!openaiBranch || !ts.isBlock(openaiBranch))
+          throw new Error("OpenAI list fallback is missing");
+        renderingBlock = openaiBranch;
+        expect(openaiBranch.statements).toHaveLength(1);
+        const statement = openaiBranch.statements[0];
+        if (
+          !ts.isExpressionStatement(statement) ||
+          !ts.isBinaryExpression(statement.expression) ||
+          statement.expression.operatorToken.kind !== ts.SyntaxKind.EqualsToken
+        )
+          throw new Error("OpenAI list must assign the shared served body");
+        expect(checker.getSymbolAtLocation(statement.expression.left)).toBe(
+          checker.getSymbolAtLocation(body.name),
+        );
+        renderExpression = statement.expression.right;
+      } else {
+        expect(declarations).toHaveLength(1);
+        body = declarations[0];
+        renderExpression = body.initializer;
+      }
+      const renderCall = renderExpression;
       if (
         !renderCall ||
         !ts.isCallExpression(renderCall) ||
@@ -128,7 +171,25 @@ describe("core catalog source ownership", () => {
         throw new Error("Served catalog body must call the shared renderer");
       expect(checker.getSymbolAtLocation(renderCall.expression)).toBe(renderSymbol);
       expect(renderCall.arguments).toHaveLength(arity);
-      const ids = renderCall.arguments[0];
+      let ids = renderCall.arguments[0];
+      if (route === "MODELS_PATH") {
+        const idsDeclaration = declarations.find(
+          (node) => checker.getSymbolAtLocation(node.name) === checker.getSymbolAtLocation(ids),
+        );
+        const fallbackCall = idsDeclaration?.initializer;
+        if (
+          !ts.isIdentifier(ids) ||
+          !fallbackCall ||
+          !ts.isCallExpression(fallbackCall) ||
+          !ts.isIdentifier(fallbackCall.expression)
+        )
+          throw new Error("OpenAI list must consume shared core IDs");
+        expect(checker.getSymbolAtLocation(fallbackCall.expression)).toBe(
+          importedSymbol("./response/catalog/render.js", "coreModelIds"),
+        );
+        expect(fallbackCall.arguments).toHaveLength(1);
+        ids = fallbackCall.arguments[0];
+      }
       if (
         !ts.isPropertyAccessExpression(ids) ||
         ids.name.text !== "ids" ||
@@ -183,7 +244,15 @@ describe("core catalog source ownership", () => {
           endCalls.push(node);
         ts.forEachChild(node, inspect);
       }
-      inspect(block);
+      inspect(renderingBlock);
+      if (route === "MODELS_PATH") {
+        inspect(ids);
+        // Native detail/list errors have their own serializers; the OpenAI list
+        // reaches only the shared success transport after provider selection.
+        for (const statement of block.statements) {
+          if (ts.isExpressionStatement(statement)) inspect(statement);
+        }
+      }
       expect(endCalls).toHaveLength(1);
       const serialized = endCalls[0].arguments[0];
       if (

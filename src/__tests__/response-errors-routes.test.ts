@@ -298,8 +298,17 @@ describe("actual legacy auth bytes", () => {
       body: requestBody("auth"),
     });
     expect(got.status).toBe(401);
-    expect(got.body).toBe(authBody);
-    expect(got.headers["content-length"]).toBe("94");
+    const expectedBody =
+      id === "messages"
+        ? '{"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}'
+        : id === "interactions" || id === "gemini" || id === "vertex"
+          ? '{"error":{"code":401,"message":"Invalid API key","status":"UNAUTHENTICATED"}}'
+          : authBody;
+    expect(got.body).toBe(expectedBody);
+    expect(got.headers["content-length"]).toBe(String(Buffer.byteLength(expectedBody)));
+    if (id === "messages") expect(got.headers["request-id"]).toMatch(/^req_<#\d+>$/);
+    else if (id === "interactions" || id === "gemini" || id === "vertex")
+      expect(got.headers).not.toHaveProperty("request-id");
     expect(got.headers["www-authenticate"]).toBe('Bearer realm="aimock"');
     evidence(`auth-${id}`, got);
   });

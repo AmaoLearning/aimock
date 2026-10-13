@@ -246,8 +246,10 @@ export const EPOCH_KEYS = [
 export const NON_EPOCH_KEYS: Readonly<Record<string, string>> = {
   acceptedAt: "live-fixture position object, not a number",
   arrivedAt: "internal performance.now() bookkeeping, never on the wire",
+  deprecated_at: "Anthropic model optional metadata, always null in synthetic catalogs",
   expiresAt: "AG-UI ISO string (rule 3)",
   observedAt: "ISO string (rule 3)",
+  retires_at: "Anthropic model optional metadata, always null in synthetic catalogs",
 };
 
 /** Longest first, so `batch_req` wins over `batch` and `vsfb` over `vs`. */

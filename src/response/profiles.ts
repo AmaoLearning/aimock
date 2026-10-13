@@ -1,3 +1,24 @@
+import type { IncomingHttpHeaders } from "node:http";
+
+/** Inbound HTTP auth uses only provider-owned paths; shared routes stay legacy. */
+export function authErrorDialectForPath(pathname: string): "messages" | "gemini" | "openai" {
+  if (pathname === "/v1/messages" || pathname === "/v1/messages/count_tokens") return "messages";
+  if (
+    pathname.startsWith("/v1beta/") ||
+    /^\/v1\/projects\/[^/]+\/locations\/[^/]+\/publishers\/google\//.test(pathname)
+  )
+    return "gemini";
+  return "openai";
+}
+
+/** Shared catalog response dialect only; auth retains its pathname-selected dialect. */
+export function isAnthropicModelRequest(headers: IncomingHttpHeaders): boolean {
+  return (
+    headers["anthropic-version"] !== undefined ||
+    (headers["x-api-key"] !== undefined && headers.authorization === undefined)
+  );
+}
+
 /** Static wire facts only. Status selection and transport behavior belong to callers. */
 export const errorProfiles = {
   openai: { fixtureType: "server_error", validationType: "invalid_request_error" },

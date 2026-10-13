@@ -127,6 +127,42 @@ export const SURFACE_REGISTRY: Record<string, SurfaceMapping> = {
     ],
     typesFile: null,
   },
+  "anthropic-catalog": {
+    provider: "Anthropic native catalog",
+    liveCoverage: "live",
+    coverageNote:
+      "Local catalog validation/cursor/lifecycle contracts run always. Bounded vendor comparisons require AIMOCK_NATIVE_PROVIDER_DRIFT=1 and ANTHROPIC_API_KEY; skipped comparisons establish no vendor conformance. Exact unknown-cursor behavior is undocumented.",
+    builderFile: "src/response/catalog/anthropic-page.ts",
+    builderFunctions: ["anthropicPage", "renderAnthropicModels"],
+    typesFile: null,
+  },
+  "gemini-catalog": {
+    provider: "Gemini native catalog",
+    liveCoverage: "live",
+    coverageNote:
+      "Local page validation contracts run always. Bounded vendor comparisons require AIMOCK_NATIVE_PROVIDER_DRIFT=1 and GOOGLE_API_KEY; skipped comparisons establish no vendor conformance. Mock offset tokens are an implementation contract, not documented vendor tokens.",
+    builderFile: "src/response/catalog/gemini-page.ts",
+    builderFunctions: ["geminiPage", "renderGeminiModels"],
+    typesFile: null,
+  },
+  "anthropic-native-errors": {
+    provider: "Anthropic native authentication and version",
+    liveCoverage: "live",
+    coverageNote:
+      "Local auth and permissive missing-version behavior run always. Bounded vendor auth/version observations require AIMOCK_NATIVE_PROVIDER_DRIFT=1; missing-version also requires ANTHROPIC_API_KEY. This records intentional default-policy divergence; it does not enforce headers.",
+    builderFile: "src/response/errors.ts",
+    builderFunctions: ["renderError", "writeUnauthorizedResponse"],
+    typesFile: null,
+  },
+  "gemini-native-auth": {
+    provider: "Gemini native authentication",
+    liveCoverage: "live",
+    coverageNote:
+      "Local mock HTTP auth401 runs always. Bounded unauthenticated Developer API observations require AIMOCK_NATIVE_PROVIDER_DRIFT=1. Google API-key rejection may differ from the mock's configured inbound auth; no 401 vendor equivalence is assumed.",
+    builderFile: "src/response/errors.ts",
+    builderFunctions: ["renderError", "writeUnauthorizedResponse"],
+    typesFile: null,
+  },
   gemini: {
     provider: "Google Gemini",
     liveCoverage: "live",

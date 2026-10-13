@@ -879,7 +879,8 @@ jobs:
           test "$(git -C "$AGUI_REPO_PATH" rev-parse HEAD)" = "$AGUI_UPSTREAM_SHA"
           test -z "$(git -C "$AGUI_REPO_PATH" status --porcelain)"
           set +e
-          npx tsx scripts/drift-report-collector.ts --out drift-report-head.json
+          npx tsx scripts/drift-report-collector.ts --out drift-report-head.json \
+            --observations-out drift-observations-head.json
           HEAD_EXIT=$?
           set -e
           if [ "$HEAD_EXIT" -eq 5 ]; then
@@ -911,6 +912,15 @@ jobs:
         with:
           name: drift-report-head
           path: drift-report-head.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload head status and body observations
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: drift-observations-head
+          path: drift-observations-head.json
           if-no-files-found: warn
           retention-days: 30
 
