@@ -1,5 +1,10 @@
 import * as http from "node:http";
-import { parsePolicy, resolvePolicy } from "./response/policy.js";
+import {
+  parsePolicy,
+  resolvePolicy,
+  resolveRequestDecisions,
+  strictOverrideField,
+} from "./response/policy.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   Fixture,
@@ -96,10 +101,8 @@ import {
   resolveRequestId,
   markMintedRequestId,
   resolveResponse,
-  resolveStrictMode,
   wouldProxyMiss,
   resolveReasoningForModel,
-  strictOverrideField,
   strictNoMatchMessage,
   strictNoMatchLogLine,
   runWithToolArgumentsScope,
@@ -468,7 +471,14 @@ function handleOptions(res: http.ServerResponse): void {
 
 function handleNotFound(res: http.ServerResponse, message: string): void {
   setCorsHeaders(res);
-  writeErrorResponse(res, 404, JSON.stringify({ error: { message, type: "not_found" } }));
+  writeErrorResponse(
+    res,
+    404,
+    renderError("openai", "route-failure", {
+      message: message,
+      type: "not_found",
+    }).body,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1658,12 +1668,10 @@ async function handleCompletions(
       status,
       openRouter
         ? serializeOpenRouterError(status, `Request body read failed: ${msg}`)
-        : JSON.stringify({
-            error: {
-              message: `Request body read failed: ${msg}`,
-              type: clientFault ? "invalid_request_error" : "server_error",
-            },
-          }),
+        : renderError("openai", "transport-failure", {
+            message: `Request body read failed: ${msg}`,
+            type: clientFault ? "invalid_request_error" : "server_error",
+          }).body,
     );
     return;
   }
@@ -1686,14 +1694,13 @@ async function handleCompletions(
       400,
       openRouter
         ? serializeOpenRouterError(400, `Malformed JSON: ${detail}`)
-        : JSON.stringify({
-            error: {
-              message: `Malformed JSON: ${detail}`,
-              type: "invalid_request_error",
-              param: null,
-              code: "invalid_json",
-            },
-          }),
+        : renderError("openai", "validation", {
+            message: `Malformed JSON: ${detail}`,
+            type: "invalid_request_error",
+            param: null,
+            code: "invalid_json",
+            includeParam: true,
+          }).body,
     );
     return;
   }
@@ -1714,12 +1721,10 @@ async function handleCompletions(
       400,
       openRouter
         ? serializeOpenRouterError(400, "Request body must be a JSON object")
-        : JSON.stringify({
-            error: {
-              message: "Request body must be a JSON object",
-              type: "invalid_request_error",
-            },
-          }),
+        : renderError("openai", "validation", {
+            message: "Request body must be a JSON object",
+            type: "invalid_request_error",
+          }).body,
     );
     return;
   }
@@ -1743,14 +1748,13 @@ async function handleCompletions(
       400,
       openRouter
         ? serializeOpenRouterError(400, "Missing required parameter: 'messages'")
-        : JSON.stringify({
-            error: {
-              message: "Missing required parameter: 'messages'",
-              type: "invalid_request_error",
-              param: null,
-              code: null,
-            },
-          }),
+        : renderError("openai", "validation", {
+            message: "Missing required parameter: 'messages'",
+            type: "invalid_request_error",
+            param: null,
+            code: null,
+            includeParam: true,
+          }).body,
     );
     return;
   }
@@ -1770,14 +1774,13 @@ async function handleCompletions(
       400,
       openRouter
         ? serializeOpenRouterError(400, message)
-        : JSON.stringify({
-            error: {
-              message,
-              type: "invalid_request_error",
-              param: null,
-              code: null,
-            },
-          }),
+        : renderError("openai", "validation", {
+            message: message,
+            type: "invalid_request_error",
+            param: null,
+            code: null,
+            includeParam: true,
+          }).body,
     );
     return;
   }
@@ -1803,7 +1806,10 @@ async function handleCompletions(
       writeErrorResponse(
         res,
         400,
-        JSON.stringify({ error: { message: toolsError, type: "invalid_request_error" } }),
+        renderError("openai", "validation", {
+          message: toolsError,
+          type: "invalid_request_error",
+        }).body,
       );
       return;
     }
@@ -2051,8 +2057,9 @@ async function handleCompletions(
   // on the non-proxied path. A miss is only proxied when record mode has an
   // upstream for THIS provider and strict is not refusing it first; the
   // shared rule lives in `wouldProxyMiss` (also used by elevenlabs-voice.ts).
-  const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
-  const missWouldProxy = wouldProxyMiss(effectiveStrict, defaults.record, providerKey);
+  const missDecisions = resolveRequestDecisions(defaults.strict, req.headers);
+  const effectiveStrict = missDecisions.fixtureMiss;
+  const missWouldProxy = wouldProxyMiss(!missDecisions.upstream, defaults.record, providerKey);
   const noFixtureSource = missWouldProxy ? "proxy" : "internal";
   // Chaos writes its own entry. Resolve by request identity, including after
   // awaited proxy hooks, so concurrent requests cannot receive each other's marker.
@@ -2147,14 +2154,13 @@ async function handleCompletions(
         strictStatus,
         openRouter
           ? serializeOpenRouterError(strictStatus, strictMessage)
-          : JSON.stringify({
-              error: {
-                message: strictMessage,
-                type: "invalid_request_error",
-                param: null,
-                code: "no_fixture_match",
-              },
-            }),
+          : renderError("openai", "strict-miss", {
+              message: strictMessage,
+              type: "invalid_request_error",
+              param: null,
+              code: "no_fixture_match",
+              includeParam: true,
+            }).body,
       );
       return;
     }
@@ -2296,14 +2302,13 @@ async function handleCompletions(
       404,
       openRouter
         ? serializeOpenRouterError(404, "No fixture matched")
-        : JSON.stringify({
-            error: {
-              message: "No fixture matched",
-              type: "invalid_request_error",
-              param: null,
-              code: "no_fixture_match",
-            },
-          }),
+        : renderError("openai", "fixture-miss", {
+            message: "No fixture matched",
+            type: "invalid_request_error",
+            param: null,
+            code: "no_fixture_match",
+            includeParam: true,
+          }).body,
     );
     return;
   }
@@ -2339,14 +2344,13 @@ async function handleCompletions(
       evaluation.status,
       openRouter
         ? serializeOpenRouterError(evaluation.status, `${evaluation.code}: ${evaluation.message}`)
-        : JSON.stringify({
-            error: {
-              message: evaluation.message,
-              type: "invalid_request_error",
-              param: null,
-              code: evaluation.code,
-            },
-          }),
+        : renderError("openai", "misbehavior", {
+            message: evaluation.message,
+            type: "invalid_request_error",
+            param: null,
+            code: evaluation.code,
+            includeParam: true,
+          }).body,
     );
     return;
   }
@@ -2368,7 +2372,7 @@ async function handleCompletions(
       ? resolveReasoningForModel(
           response.reasoning,
           responseModel,
-          resolveStrictMode(defaults.strict, req.headers),
+          resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
           defaults.logger,
         )
       : undefined;
@@ -2498,13 +2502,11 @@ async function handleCompletions(
             422,
             "Audio responses are not supported on the chat completions endpoint. Use Gemini generateContent or a dedicated audio endpoint.",
           )
-        : JSON.stringify({
-            error: {
-              message:
-                "Audio responses are not supported on the chat completions endpoint. Use Gemini generateContent or a dedicated audio endpoint.",
-              type: "invalid_request_error",
-            },
-          }),
+        : renderError("openai", "validation", {
+            message:
+              "Audio responses are not supported on the chat completions endpoint. Use Gemini generateContent or a dedicated audio endpoint.",
+            type: "invalid_request_error",
+          }).body,
     );
     return;
   }
@@ -2599,7 +2601,10 @@ async function handleCompletions(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = appliedPlan
       ? appliedReasoning
       : resolveReasoningForModel(
@@ -2698,7 +2703,10 @@ async function handleCompletions(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = appliedPlan
       ? appliedReasoning
       : resolveReasoningForModel(
@@ -2772,7 +2780,10 @@ async function handleCompletions(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = appliedPlan
       ? appliedReasoning
       : resolveReasoningForModel(
@@ -2854,12 +2865,10 @@ async function handleCompletions(
     500,
     openRouter
       ? serializeOpenRouterError(500, "Fixture response did not match any known type")
-      : JSON.stringify({
-          error: {
-            message: "Fixture response did not match any known type",
-            type: "server_error",
-          },
-        }),
+      : renderError("openai", "unknown-response", {
+          message: "Fixture response did not match any known type",
+          type: "server_error",
+        }).body,
   );
 }
 
@@ -4538,12 +4547,10 @@ async function startServer(
             writeErrorResponse(
               res,
               400,
-              JSON.stringify({
-                error: {
-                  message: `Invalid limit parameter: "${limitParam}"`,
-                  type: "invalid_request_error",
-                },
-              }),
+              renderError("openai", "validation", {
+                message: `Invalid limit parameter: "${limitParam}"`,
+                type: "invalid_request_error",
+              }).body,
             );
             return;
           }
@@ -5245,12 +5252,10 @@ async function startServer(
         writeErrorResponse(
           res,
           400,
-          JSON.stringify({
-            error: {
-              message: `Invalid voice id '${elevenLabsVoiceMatch[1]}': malformed percent-encoding`,
-              type: "invalid_request_error",
-            },
-          }),
+          renderError("openai", "validation", {
+            message: `Invalid voice id '${elevenLabsVoiceMatch[1]}': malformed percent-encoding`,
+            type: "invalid_request_error",
+          }).body,
         );
         // Journaled AFTER the write, like every other terminal arm in this
         // batch: the caller's answer never waits on bookkeeping. Tagged with

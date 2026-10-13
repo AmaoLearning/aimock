@@ -20,6 +20,8 @@ export interface ErrorDetails {
   message: string;
   type?: string | null;
   param?: string | null;
+  /** Explicitly retain the native OpenAI param slot; omitted preserves legacy templates. */
+  includeParam?: true;
   /** Normalized correlation metadata explicitly supplied by native header-policy rejects. */
   requestId?: string;
   code?: string | null;
@@ -34,12 +36,20 @@ export interface ErrorDetails {
 }
 
 /** Common inner OpenAI error; callers retain native event wrappers and defaults. */
-export function buildOpenAIError(details: Pick<ErrorDetails, "message" | "type" | "code">): {
+export function buildOpenAIError(
+  details: Pick<ErrorDetails, "message" | "type" | "param" | "code" | "includeParam">,
+): {
   message: string;
   type?: string | null;
+  param?: string | null;
   code?: string | null;
 } {
-  return { message: details.message, type: details.type, code: details.code };
+  return {
+    message: details.message,
+    type: details.type,
+    ...(details.includeParam === true ? { param: details.param ?? null } : {}),
+    code: details.code,
+  };
 }
 
 /** Native purpose templates preserve field presence and insertion order. No status or I/O. */

@@ -33,6 +33,114 @@ const completionContracts: {
   {
     wire: "openai",
     purpose: "validation",
+    details: {
+      message: "Invalid",
+      type: "invalid_request_error",
+      param: null,
+      code: "invalid_json",
+      includeParam: true,
+    },
+    body: '{"error":{"message":"Invalid","type":"invalid_request_error","param":null,"code":"invalid_json"}}',
+  },
+  {
+    wire: "openai",
+    purpose: "strict-miss",
+    details: {
+      message: "Miss",
+      type: "invalid_request_error",
+      param: null,
+      code: "no_fixture_match",
+      includeParam: true,
+    },
+    body: '{"error":{"message":"Miss","type":"invalid_request_error","param":null,"code":"no_fixture_match"}}',
+  },
+  {
+    wire: "openai",
+    purpose: "fixture-miss",
+    details: {
+      message: "Miss",
+      type: "invalid_request_error",
+      param: null,
+      code: "no_fixture_match",
+      includeParam: true,
+    },
+    body: '{"error":{"message":"Miss","type":"invalid_request_error","param":null,"code":"no_fixture_match"}}',
+  },
+  {
+    wire: "openai",
+    purpose: "misbehavior",
+    details: {
+      message: "Fault",
+      type: "invalid_request_error",
+      param: null,
+      code: "fault",
+      includeParam: true,
+    },
+    body: '{"error":{"message":"Fault","type":"invalid_request_error","param":null,"code":"fault"}}',
+  },
+  {
+    wire: "openai",
+    purpose: "validation",
+    details: { message: "Null code", param: null, code: null, includeParam: true },
+    body: '{"error":{"message":"Null code","type":"invalid_request_error","param":null,"code":null}}',
+  },
+  {
+    wire: "openai",
+    purpose: "validation",
+    details: { message: "Missing code", param: undefined, includeParam: true },
+    body: '{"error":{"message":"Missing code","type":"invalid_request_error","param":null}}',
+  },
+  {
+    wire: "openai",
+    purpose: "validation",
+    details: { message: "Empty", type: "", param: "", code: "", includeParam: true },
+    body: '{"error":{"message":"Empty","type":"","param":"","code":""}}',
+  },
+  {
+    wire: "openai",
+    purpose: "misbehavior",
+    details: { message: "Absent type and code", includeParam: true },
+    body: '{"error":{"message":"Absent type and code","param":null}}',
+  },
+  {
+    wire: "openai",
+    purpose: "validation",
+    details: { message: "Legacy null", param: null, code: "invalid_json" },
+    body: '{"error":{"message":"Legacy null","type":"invalid_request_error","code":"invalid_json"}}',
+  },
+  {
+    wire: "openai",
+    purpose: "validation",
+    details: { message: "Legacy model", param: "model", code: null },
+    body: '{"error":{"message":"Legacy model","type":"invalid_request_error","code":null}}',
+  },
+  {
+    wire: "openai",
+    purpose: "misbehavior",
+    details: { message: "Legacy null", type: "api_error", param: null, code: "fault" },
+    body: '{"error":{"message":"Legacy null","type":"api_error","code":"fault"}}',
+  },
+  {
+    wire: "openai",
+    purpose: "misbehavior",
+    details: { message: "Legacy model", param: "model" },
+    body: '{"error":{"message":"Legacy model"}}',
+  },
+  {
+    wire: "gemini",
+    purpose: "validation",
+    details: {
+      message: "Invalid",
+      bodyCode: 400,
+      status: "INVALID_ARGUMENT",
+      param: null,
+      includeParam: true,
+    },
+    body: '{"error":{"message":"Invalid","code":400,"status":"INVALID_ARGUMENT"}}',
+  },
+  {
+    wire: "openai",
+    purpose: "validation",
     details: { message: "Invalid", code: "invalid_json" },
     body: '{"error":{"message":"Invalid","type":"invalid_request_error","code":"invalid_json"}}',
   },
@@ -204,6 +312,34 @@ describe("completed common owner contracts", () => {
     expect(JSON.stringify(buildOpenAIError({ message: "Empty", type: "", code: null }))).toBe(
       '{"message":"Empty","type":"","code":null}',
     );
+  });
+
+  it("opts in to the typed param slot before code without inventing absent type or code", () => {
+    const error = buildOpenAIError({ message: "Only message", includeParam: true });
+    expect(Object.keys(error)).toEqual(["message", "type", "param", "code"]);
+    expect(JSON.stringify(error)).toBe('{"message":"Only message","param":null}');
+    expect(
+      JSON.stringify(
+        buildOpenAIError({
+          message: "Empty",
+          type: "",
+          param: "",
+          code: null,
+          includeParam: true,
+        }),
+      ),
+    ).toBe('{"message":"Empty","type":"","param":"","code":null}');
+  });
+
+  it("keeps supplied param ignored in the typed builder without the explicit opt-in", () => {
+    const error = buildOpenAIError({
+      message: "Legacy",
+      type: "api_error",
+      param: "model",
+      code: "fault",
+    });
+    expect(Object.keys(error)).toEqual(["message", "type", "code"]);
+    expect(JSON.stringify(error)).toBe('{"message":"Legacy","type":"api_error","code":"fault"}');
   });
 });
 
