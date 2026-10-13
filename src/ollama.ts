@@ -35,8 +35,6 @@ import {
   normalizeEmbeddingInput,
   resolveFixtureBlocks,
   resolveFixtureBlockOutcome,
-  estimatePromptTokens,
-  estimateTokens,
   serializeErrorResponse,
   generateDeterministicEmbedding,
   flattenHeaders,
@@ -61,6 +59,7 @@ import type { Journal } from "./journal.js";
 import { applyChaosAsync } from "./chaos.js";
 import { planMisbehavior, recordMisbehaviorOutcome, type MisbehaviorPlan } from "./misbehavior.js";
 import { proxyAndRecord } from "./recorder.js";
+import { render as renderUsage } from "./response/usage/codecs/ollama.js";
 
 // ─── Ollama request types ────────────────────────────────────────────────────
 
@@ -103,9 +102,9 @@ const DURATION_FIELDS = {
   done_reason: "stop" as const,
   total_duration: 0,
   load_duration: 0,
-  prompt_eval_count: 0,
+  ...renderUsage({ kind: "ordinary-zero" }, "prompt"),
   prompt_eval_duration: 0,
-  eval_count: 0,
+  ...renderUsage({ kind: "ordinary-zero" }, "completion"),
   eval_duration: 0,
 };
 
@@ -626,8 +625,7 @@ function prepareOllamaMisbehavior(
   const terminal = chunks.length - 1;
   chunks[terminal] = {
     ...chunks[terminal],
-    prompt_eval_count: estimatePromptTokens(request.messages),
-    eval_count: estimateTokens(completion),
+    ...renderUsage({ kind: "applied-chat-estimate", messages: request.messages, completion }),
   };
   return { chunks, status: 200, summary: { ...plan.summary, servedToolCalls } };
 }

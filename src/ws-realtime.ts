@@ -45,6 +45,7 @@ import { delay, calculateDelay } from "./sse-writer.js";
 import { DEFAULT_TEST_ID, type Journal } from "./journal.js";
 import type { Logger } from "./logger.js";
 import type { WebSocketConnection } from "./ws-framing.js";
+import { render as renderRealtimeUsage } from "./response/usage/codecs/realtime.js";
 
 /**
  * Wire label for custom-tool-call rejections on this transport, on both the
@@ -1219,7 +1220,7 @@ function checkRealtimeFixtureToolCalls<T>(
               code: fixtureToolCallErrorCode(err),
             },
           },
-          usage: { total_tokens: 0, input_tokens: 0, output_tokens: 0 },
+          usage: renderRealtimeUsage({ kind: "ordinary-zero" }),
         },
       },
       isBeta,
@@ -1355,7 +1356,7 @@ async function handleResponseCreate(
               code: "no_fixture_match",
             },
           },
-          usage: { total_tokens: 0, input_tokens: 0, output_tokens: 0 },
+          usage: renderRealtimeUsage({ kind: "ordinary-zero" }),
         },
       },
       isBeta,
@@ -1453,11 +1454,7 @@ async function handleResponseCreate(
       journalEntry,
       {
         stop: misbehavior.stop,
-        usage: {
-          input_tokens: usage.prompt_tokens,
-          output_tokens: usage.completion_tokens,
-          total_tokens: usage.total_tokens,
-        },
+        usage: renderRealtimeUsage({ kind: "applied-misbehavior", usage }),
       },
     );
     return;
@@ -1499,7 +1496,7 @@ async function handleResponseCreate(
               code: response.error.code,
             },
           },
-          usage: { total_tokens: 0, input_tokens: 0, output_tokens: 0 },
+          usage: renderRealtimeUsage({ kind: "ordinary-zero" }),
         },
       },
       isBeta,
@@ -1924,7 +1921,7 @@ async function handleResponseCreate(
           object: "realtime.response",
           status: "completed",
           output: allOutputItems,
-          usage: { total_tokens: 0, input_tokens: 0, output_tokens: 0 },
+          usage: renderRealtimeUsage({ kind: "ordinary-zero" }),
         },
       },
       isBeta,
@@ -2137,7 +2134,7 @@ async function handleResponseCreate(
           object: "realtime.response",
           status: "completed",
           output: [outputItem],
-          usage: { total_tokens: 0, input_tokens: 0, output_tokens: 0 },
+          usage: renderRealtimeUsage({ kind: "ordinary-zero" }),
         },
       },
       isBeta,
@@ -2344,7 +2341,7 @@ async function handleResponseCreate(
           object: "realtime.response",
           status: "completed",
           output: outputItems,
-          usage: { total_tokens: 0, input_tokens: 0, output_tokens: 0 },
+          usage: renderRealtimeUsage({ kind: "ordinary-zero" }),
         },
       },
       isBeta,
@@ -2735,7 +2732,7 @@ async function streamRealtimeBlocks(
             }
           : {}),
         output: allOutputItems,
-        usage: fault?.usage ?? { total_tokens: 0, input_tokens: 0, output_tokens: 0 },
+        usage: fault?.usage ?? renderRealtimeUsage({ kind: "ordinary-zero" }),
       },
     },
     isBeta,

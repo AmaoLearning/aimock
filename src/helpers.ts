@@ -1,3 +1,7 @@
+import {
+  resolve as resolveOpenAIUsage,
+  render as renderOpenAIUsage,
+} from "./response/usage/codecs/openai.js";
 import type { MisbehaviorPlan, ServedMisbehaviorToolCall } from "./misbehavior.js";
 import type { LiveFixtureResponse } from "./live-types.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -1547,43 +1551,8 @@ export function resolveUsage(
   promptText: string,
   completionText: string,
 ): { prompt_tokens: number; completion_tokens: number; total_tokens: number } {
-  if (overrides?.usage) {
-    const u = overrides.usage;
-    // A usage override that scripts only cost fields (e.g. `{ cost: 0.5 }`)
-    // carries NO token counts. Real providers always report real token usage,
-    // so estimate the counts rather than forcing them to 0 — otherwise a
-    // cost-scripting fixture is unfaithful (cost present, tokens 0). When the
-    // override DOES set any token count we preserve the explicit-or-zero merge
-    // behavior, and any explicit token value always wins.
-    const hasExplicitTokens =
-      u.prompt_tokens !== undefined ||
-      u.completion_tokens !== undefined ||
-      u.total_tokens !== undefined ||
-      u.input_tokens !== undefined ||
-      u.output_tokens !== undefined ||
-      u.promptTokenCount !== undefined ||
-      u.candidatesTokenCount !== undefined ||
-      u.totalTokenCount !== undefined;
-    const fallbackPrompt = hasExplicitTokens ? 0 : estimateTokens(promptText || "x");
-    const fallbackCompletion = hasExplicitTokens ? 0 : estimateTokens(completionText || "x");
-    const prompt = u.prompt_tokens ?? u.input_tokens ?? u.promptTokenCount ?? fallbackPrompt;
-    const completion =
-      u.completion_tokens ?? u.output_tokens ?? u.candidatesTokenCount ?? fallbackCompletion;
-    return {
-      prompt_tokens: prompt,
-      completion_tokens: completion,
-      total_tokens: u.total_tokens ?? u.totalTokenCount ?? prompt + completion,
-    };
-  }
-  const prompt = estimateTokens(promptText || "x");
-  const completion = estimateTokens(completionText || "x");
-  return {
-    prompt_tokens: prompt,
-    completion_tokens: completion,
-    total_tokens: prompt + completion,
-  };
+  return renderOpenAIUsage(resolveOpenAIUsage(overrides, { promptText, completionText }));
 }
-
 /**
  * Build an SSE usage chunk for streaming responses.
  * OpenAI emits this as the final chunk before [DONE] when

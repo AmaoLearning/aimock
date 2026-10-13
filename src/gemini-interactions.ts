@@ -49,6 +49,7 @@ import type { Journal } from "./journal.js";
 import type { Logger } from "./logger.js";
 import { applyChaosAsync } from "./chaos.js";
 import { proxyAndRecord } from "./recorder.js";
+import { render as renderInteractionsUsage } from "./response/usage/codecs/interactions.js";
 import {
   planMisbehavior,
   recordMisbehaviorOutcome,
@@ -354,23 +355,7 @@ function interactionsUsage(overrides?: ResponseOverrides): {
   total_output_tokens: number;
   total_tokens: number;
 } {
-  if (!overrides?.usage) return { total_input_tokens: 0, total_output_tokens: 0, total_tokens: 0 };
-  const input =
-    overrides.usage.input_tokens ??
-    overrides.usage.prompt_tokens ??
-    overrides.usage.promptTokenCount ??
-    0;
-  const output =
-    overrides.usage.output_tokens ??
-    overrides.usage.completion_tokens ??
-    overrides.usage.candidatesTokenCount ??
-    0;
-  const total = overrides.usage.total_tokens ?? overrides.usage.totalTokenCount ?? input + output;
-  return {
-    total_input_tokens: input,
-    total_output_tokens: output,
-    total_tokens: total,
-  };
+  return renderInteractionsUsage(overrides);
 }
 
 // ─── Response building: fixture → Interactions format ─────────────────────
@@ -1175,11 +1160,7 @@ export async function handleGeminiInteractions(
     // Reasoning-only output carries no tool call, so it has no tool-call check
     // to pass before drawing its id.
     const interactionId = nextInteractionId();
-    const usage = {
-      ...interactionsUsage({ usage: appliedUsage }),
-      total_output_tokens: 0,
-      total_thought_tokens: appliedUsage?.completion_tokens ?? 0,
-    };
+    const usage = renderInteractionsUsage({ usage: appliedUsage }, "applied-reasoning-only");
     if (!streaming) {
       const overrides =
         isTextResponse(response) ||

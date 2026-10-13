@@ -38,7 +38,6 @@ import {
   getTestId,
   resolveFixtureBlockOutcome,
   resolveResponse,
-  resolveUsage,
   resolveStrictMode,
   resolveReasoningForModel,
   strictOverrideField,
@@ -54,6 +53,8 @@ import type { Logger } from "./logger.js";
 import { applyChaosAsync } from "./chaos.js";
 import { proxyAndRecord } from "./recorder.js";
 import { planMisbehavior, recordMisbehaviorOutcome, type MisbehaviorPlan } from "./misbehavior.js";
+import { mapGeminiFinish } from "./response/finish.js";
+import { render as renderGeminiUsage } from "./response/usage/codecs/gemini.js";
 
 // ─── Gemini request types ───────────────────────────────────────────────────
 
@@ -279,12 +280,7 @@ export function geminiToCompletionRequest(
 
 function geminiFinishReason(finishReason: string | undefined, defaultReason: string): string {
   if (!finishReason) return defaultReason;
-  if (finishReason === "stop") return "STOP";
-  if (finishReason === "tool_calls") return "FUNCTION_CALL";
-  if (finishReason === "length") return "MAX_TOKENS";
-  if (finishReason === "content_filter") return "SAFETY";
-  // Pass through unrecognized values as-is
-  return finishReason;
+  return mapGeminiFinish(finishReason);
 }
 
 function geminiUsageMetadata(overrides?: ResponseOverrides): {
@@ -292,24 +288,7 @@ function geminiUsageMetadata(overrides?: ResponseOverrides): {
   candidatesTokenCount: number;
   totalTokenCount: number;
 } {
-  if (!overrides?.usage)
-    return { promptTokenCount: 0, candidatesTokenCount: 0, totalTokenCount: 0 };
-  const prompt =
-    overrides.usage.promptTokenCount ??
-    overrides.usage.prompt_tokens ??
-    overrides.usage.input_tokens ??
-    0;
-  const candidates =
-    overrides.usage.candidatesTokenCount ??
-    overrides.usage.completion_tokens ??
-    overrides.usage.output_tokens ??
-    0;
-  const total = overrides.usage.totalTokenCount ?? prompt + candidates;
-  return {
-    promptTokenCount: prompt,
-    candidatesTokenCount: candidates,
-    totalTokenCount: total,
-  };
+  return renderGeminiUsage(overrides);
 }
 
 interface GeminiResponseChunk {
@@ -747,7 +726,7 @@ function buildGeminiAudioResponse(
         index: 0,
       },
     ],
-    usageMetadata: { promptTokenCount: 0, candidatesTokenCount: 0, totalTokenCount: 0 },
+    usageMetadata: renderGeminiUsage(),
   };
 }
 
@@ -769,7 +748,7 @@ function buildGeminiAudioStreamChunks(
           index: 0,
         },
       ],
-      usageMetadata: { promptTokenCount: 0, candidatesTokenCount: 0, totalTokenCount: 0 },
+      usageMetadata: renderGeminiUsage(),
     },
   ];
 }
@@ -948,13 +927,12 @@ function prepareGeminiMisbehavior(
         (part.functionCall ? part.functionCall.name + JSON.stringify(part.functionCall.args) : ""),
     )
     .join("");
-  const usage = resolveUsage(undefined, prompt, output);
   for (const chunk of chunks) delete chunk.usageMetadata;
-  chunks[chunks.length - 1].usageMetadata = {
-    promptTokenCount: usage.prompt_tokens,
-    candidatesTokenCount: usage.completion_tokens,
-    totalTokenCount: usage.total_tokens,
-  };
+  chunks[chunks.length - 1].usageMetadata = renderGeminiUsage(undefined, {
+    kind: "applied-misbehavior",
+    promptText: prompt,
+    completionText: output,
+  });
   return { chunks, summary: { ...plan.summary, servedToolCalls } };
 }
 

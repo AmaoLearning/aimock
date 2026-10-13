@@ -64,6 +64,8 @@ import type { Journal } from "./journal.js";
 import { applyChaosAsync } from "./chaos.js";
 import { proxyAndRecord } from "./recorder.js";
 import { planMisbehavior, recordMisbehaviorOutcome } from "./misbehavior.js";
+import { render as renderResponsesUsage } from "./response/usage/codecs/responses.js";
+import { mapResponsesFinish } from "./response/finish.js";
 
 // ─── Responses API request types ────────────────────────────────────────────
 
@@ -533,26 +535,7 @@ export function validateResponsesTools(tools: unknown): string | undefined {
 
 function responsesStatus(finishReason: string | undefined, defaultStatus: string): string {
   if (!finishReason) return defaultStatus;
-  if (finishReason === "stop") return "completed";
-  if (finishReason === "tool_calls") return "completed";
-  if (finishReason === "length") return "incomplete";
-  if (finishReason === "content_filter") return "failed";
-  return finishReason;
-}
-
-function responsesUsage(overrides?: ResponseOverrides): {
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-} {
-  if (!overrides?.usage) return { input_tokens: 0, output_tokens: 0, total_tokens: 0 };
-  const input = overrides.usage.input_tokens ?? overrides.usage.prompt_tokens ?? 0;
-  const output = overrides.usage.output_tokens ?? overrides.usage.completion_tokens ?? 0;
-  return {
-    input_tokens: input,
-    output_tokens: output,
-    total_tokens: overrides.usage.total_tokens ?? input + output,
-  };
+  return mapResponsesFinish(finishReason);
 }
 
 function responseId(): string {
@@ -607,7 +590,7 @@ export function buildTextStreamEvents(
       model: overrides?.model ?? model,
       status: responsesStatus(overrides?.finishReason, "completed"),
       output: [...prefixOutputItems, msgItem],
-      usage: responsesUsage(overrides),
+      usage: renderResponsesUsage(overrides),
     },
   });
 
@@ -799,7 +782,7 @@ export function toolCallStreamEvents(
       model: overrides?.model ?? model,
       status: responsesStatus(overrides?.finishReason, "completed"),
       output: [...prefixOutputItems, ...fcOutputItems],
-      usage: responsesUsage(overrides),
+      usage: renderResponsesUsage(overrides),
     },
   });
 
@@ -1387,7 +1370,7 @@ function buildResponseEnvelope(
     model: overrides?.model ?? model,
     status: responsesStatus(overrides?.finishReason, "completed"),
     output,
-    usage: responsesUsage(overrides),
+    usage: renderResponsesUsage(overrides),
   };
 }
 
@@ -1575,7 +1558,7 @@ export function contentWithToolCallsStreamEvents(
       model: overrides?.model ?? model,
       status: responsesStatus(overrides?.finishReason, "completed"),
       output: [...prefixOutputItems, ...orderedOutputItems],
-      usage: responsesUsage(overrides),
+      usage: renderResponsesUsage(overrides),
     },
   });
 
@@ -2459,11 +2442,7 @@ export function buildResponsesMisbehavior(
         }
       : {}),
     output,
-    usage: {
-      input_tokens: usage.prompt_tokens,
-      output_tokens: usage.completion_tokens,
-      total_tokens: usage.total_tokens,
-    },
+    usage: renderResponsesUsage({ usage }),
   };
   events.push({ type: incomplete ? "response.incomplete" : "response.completed", response: body });
   return { response: body, events };

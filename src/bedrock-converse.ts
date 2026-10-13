@@ -51,6 +51,7 @@ import { createInterruptionSignal } from "./interruption.js";
 import type { Journal } from "./journal.js";
 import type { Logger } from "./logger.js";
 import { mapAnthropicFinish } from "./response/finish.js";
+import { render as renderConverseUsage } from "./response/usage/codecs/converse.js";
 import { applyChaosAsync } from "./chaos.js";
 import { proxyAndRecord } from "./recorder.js";
 import { planMisbehavior, recordMisbehaviorOutcome, type MisbehaviorPlan } from "./misbehavior.js";
@@ -99,15 +100,8 @@ function converseStopReason(
  * and does not perform real tokenisation.  Callers that need non-zero
  * usage should supply explicit `usage` overrides in their fixture.
  */
-function converseUsage(overrides?: ResponseOverrides): {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-} {
-  if (!overrides?.usage) return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
-  const inputTokens = overrides.usage.input_tokens ?? overrides.usage.prompt_tokens ?? 0;
-  const outputTokens = overrides.usage.output_tokens ?? overrides.usage.completion_tokens ?? 0;
-  return { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens };
+function converseUsage(overrides?: ResponseOverrides): ReturnType<typeof renderConverseUsage> {
+  return renderConverseUsage(overrides);
 }
 
 function parseConverseToolArgumentsForStream(toolCall: ToolCall, logger: Logger): string {
@@ -797,7 +791,7 @@ function prepareConverseMisbehavior(
     blocks,
     reasoning,
     stopReason,
-    usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens },
+    usage: renderConverseUsage(undefined, { input: inputTokens, output: outputTokens }),
   };
 }
 

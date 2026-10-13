@@ -63,6 +63,8 @@ import {
   recordMisbehaviorOutcome,
 } from "./misbehavior.js";
 import { proxyAndRecord } from "./recorder.js";
+import { mapCohereFinish } from "./response/finish.js";
+import { render as renderCohereUsage } from "./response/usage/codecs/cohere.js";
 
 // ─── Cohere v2 Chat request types ───────────────────────────────────────────
 
@@ -123,13 +125,6 @@ interface CohereSSEEvent {
   [key: string]: unknown;
 }
 
-// ─── Zero-value usage block ─────────────────────────────────────────────────
-
-const ZERO_USAGE = {
-  billed_units: { input_tokens: 0, output_tokens: 0, search_units: 0, classifications: 0 },
-  tokens: { input_tokens: 0, output_tokens: 0 },
-};
-
 // ─── Cohere finish reason / usage mapping ──────────────────────────────────
 
 function cohereFinishReason(
@@ -137,25 +132,11 @@ function cohereFinishReason(
   defaultReason: string,
 ): string {
   if (!overrideFinishReason) return defaultReason;
-  if (overrideFinishReason === "stop") return "COMPLETE";
-  if (overrideFinishReason === "tool_calls") return "TOOL_CALL";
-  if (overrideFinishReason === "length") return "MAX_TOKENS";
-  return overrideFinishReason;
+  return mapCohereFinish(overrideFinishReason);
 }
 
-function cohereUsage(overrides?: ResponseOverrides): typeof ZERO_USAGE {
-  if (!overrides?.usage) return ZERO_USAGE;
-  const inputTokens = overrides.usage.input_tokens ?? overrides.usage.prompt_tokens ?? 0;
-  const outputTokens = overrides.usage.output_tokens ?? overrides.usage.completion_tokens ?? 0;
-  return {
-    billed_units: {
-      input_tokens: inputTokens,
-      output_tokens: outputTokens,
-      search_units: 0,
-      classifications: 0,
-    },
-    tokens: { input_tokens: inputTokens, output_tokens: outputTokens },
-  };
+function cohereUsage(overrides?: ResponseOverrides): ReturnType<typeof renderCohereUsage> {
+  return renderCohereUsage(overrides);
 }
 
 // ─── Input conversion: Cohere → ChatCompletionRequest ───────────────────────
