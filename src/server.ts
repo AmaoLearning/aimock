@@ -1,4 +1,5 @@
 import * as http from "node:http";
+import { parsePolicy, resolvePolicy } from "./response/policy.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   Fixture,
@@ -113,7 +114,7 @@ import { DEFAULT_TEST_ID } from "./constants.js";
 import { collect, idsFor } from "./response/catalog/collect.js";
 import { anthropicPage } from "./response/catalog/anthropic-page.js";
 import { geminiPage } from "./response/catalog/gemini-page.js";
-import { isAnthropicModelRequest } from "./response/profiles.js";
+import { isAnthropicModelRequest, missingRequiredHeader } from "./response/profiles.js";
 import {
   coreModelIds,
   renderOpenAIModel,
@@ -2981,6 +2982,8 @@ async function startServer(
   const port = options?.port ?? 0;
   const registry = options?.metrics ? createMetricsRegistry() : undefined;
   const serverOptions = options ?? {};
+  // Invalid JavaScript options warn even when ordinary server logging is silent.
+  parsePolicy(serverOptions.policy, (message) => new Logger("warn").warn(message));
   // 1.44.0 ignored an unknown `responsesTools` option, so an invalid value is
   // ignored with a warning (at any logLevel, as aimock --config warns) and the
   // server runs in "legacy" mode.
@@ -3075,6 +3078,9 @@ async function startServer(
     },
     get strict() {
       return serverOptions.strict;
+    },
+    get policy() {
+      return serverOptions.policy;
     },
     get strictToolArguments() {
       return serverOptions.strictToolArguments;
@@ -4039,6 +4045,22 @@ async function startServer(
       setCorsHeaders(res);
       const google = pathname === GEMINI_MODELS_PATH || geminiModelDetailMatch !== null;
       const anthropic = !google && isAnthropicModelRequest(req.headers);
+      const policy = resolvePolicy(defaults, req.headers);
+      const missingHeader =
+        anthropic && policy.requiredHeaders === "enforce"
+          ? missingRequiredHeader("messages", req.headers)
+          : undefined;
+      if (missingHeader) {
+        writeErrorResponse(
+          res,
+          400,
+          renderError("messages", "thinking", {
+            message: `${missingHeader}: header is required`,
+            requestId,
+          }).body,
+        );
+        return;
+      }
       const ids = coreModelIds(collect(fixtures, "all").ids);
       const visible = google ? idsFor(ids, "google") : anthropic ? idsFor(ids, "anthropic") : ids;
       const catalogError = (status: number, message: string): void => {
@@ -4574,6 +4596,7 @@ async function startServer(
           google,
           geminiCountMatch?.[1] ?? "",
           journal,
+          defaults,
           setCorsHeaders,
         );
       } catch (err: unknown) {

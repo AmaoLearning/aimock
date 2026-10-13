@@ -935,6 +935,7 @@ export interface AimockConfig {
         enableMcpRecording?: boolean;
         strictToolArguments?: boolean;
         responsesTools?: ResponsesToolsMode;
+        policy?: AimockPolicy;
     };
     // (undocumented)
     mcp?: MCPConfig;
@@ -959,6 +960,11 @@ export class AimockFakesReportError extends Error {
     constructor(report: McpFakesReport, message: string);
     // (undocumented)
     readonly report: McpFakesReport;
+}
+
+// @public (undocumented)
+export interface AimockPolicy {
+    requiredHeaders?: "off" | "enforce";
 }
 
 // @public
@@ -2603,6 +2609,7 @@ interface HandlerDefaults {
     misbehaviorCounters?: MisbehaviorCounters;
     // (undocumented)
     openRouterVideo?: FalQueueConfig;
+    policy?: AimockPolicy;
     // (undocumented)
     record?: RecordConfig;
     // (undocumented)
@@ -4219,6 +4226,7 @@ export interface MockServerOptions {
     metrics?: boolean;
     misbehavior?: MisbehaviorConfig | MisbehaviorFaultId;
     openRouterVideo?: FalQueueConfig;
+    policy?: AimockPolicy;
     // (undocumented)
     port?: number;
     record?: RecordConfig;
@@ -4872,7 +4880,7 @@ export interface SSEToolCallDelta {
     type?: "function";
 }
 
-// @public (undocumented)
+// @public
 export function startFromConfig(config: AimockConfig, overrides?: StartFromConfigOverrides): Promise<{
     llmock: LLMock;
     url: string;
@@ -4883,6 +4891,7 @@ interface StartFromConfigOverrides {
     enableMisbehavior?: boolean;
     // (undocumented)
     host?: string;
+    policy?: AimockPolicy;
     // (undocumented)
     port?: number;
     responsesTools?: ResponsesToolsMode;

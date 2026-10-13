@@ -187,6 +187,111 @@ describe.skipIf(!child)("actual collector observation producer", () => {
 });
 
 describe.skipIf(child)("live observation collector transport", () => {
+  it("persists all native enforced-version observations from the real producers", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "aimock-native-version-collector-"));
+    try {
+      symlinkSync(join(root, "node_modules"), join(directory, "node_modules"), "dir");
+      writeFileSync(join(directory, "package.json"), '{"type":"module"}');
+      const producers = [
+        join(root, "src/__tests__/drift/anthropic.drift.ts"),
+        join(root, "src/__tests__/drift/models.drift.ts"),
+      ];
+      writeFileSync(
+        join(directory, "vitest.config.drift.ts"),
+        `export default { test: { include: ${JSON.stringify(producers)}, testNamePattern: "native provider (catalog|Anthropic auth and missing-version) local contracts", pool: "forks", maxWorkers: 1, minWorkers: 1, fileParallelism: false, testTimeout: 30000 } };`,
+      );
+      const agUiRepo = join(directory, "unavailable-agui");
+      mkdirSync(agUiRepo);
+      const report = join(directory, "drift-report.json");
+      const observations = join(directory, "drift-observations.json");
+      const result = await new Promise<{ status: number; stdout: string; stderr: string }>(
+        (resolve, reject) => {
+          execFile(
+            process.execPath,
+            [
+              join(root, "node_modules/tsx/dist/cli.mjs"),
+              join(root, "scripts/drift-report-collector.ts"),
+              "--out",
+              report,
+              "--observations-out",
+              observations,
+            ],
+            {
+              cwd: directory,
+              encoding: "utf8",
+              timeout: 60_000,
+              env: {
+                ...process.env,
+                ANTHROPIC_API_KEY: "",
+                GOOGLE_API_KEY: "",
+                AIMOCK_NATIVE_PROVIDER_DRIFT: "",
+                AGUI_REPO_PATH: agUiRepo,
+              },
+            },
+            (error, stdout, stderr) => {
+              if (!error) resolve({ status: 0, stdout, stderr });
+              else if (typeof error.code === "number" && !error.killed)
+                resolve({ status: error.code, stdout, stderr });
+              else reject(error);
+            },
+          );
+        },
+      );
+      const invocationPath = join(
+        directory,
+        "drift-evidence",
+        readdirSync(join(directory, "drift-evidence"))[0],
+      );
+      const invocation: { drift: { exitCode: number | null } } = JSON.parse(
+        readFileSync(invocationPath, "utf8"),
+      );
+      const shapeReport = JSON.parse(readFileSync(report, "utf8"));
+      const artifact: { observations: LiveObservation[] } = JSON.parse(
+        readFileSync(observations, "utf8"),
+      );
+      const destination = process.env.AIMOCK_F6B_EMIT_PROOF_DIR;
+      if (destination) {
+        mkdirSync(destination, { recursive: true });
+        copyFileSync(report, join(destination, "drift-report.json"));
+        copyFileSync(observations, join(destination, "drift-observations.json"));
+        copyFileSync(invocationPath, join(destination, "invocation.json"));
+      }
+      console.log(
+        `native enforcement persistence: collector exit=${result.status}; native exit=${invocation.drift.exitCode}; records=${artifact.observations.length}`,
+      );
+      // The outer exit reflects the deliberately unavailable AG-UI checkout, not native failure.
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("AG-UI drift detection was skipped");
+      expect(invocation.drift.exitCode).toBe(0);
+      expect(shapeReport.entries).toEqual([]);
+      expect(shapeReport.quarantine).toBeUndefined();
+      const native = {
+        status: 400,
+        body: {
+          type: "error",
+          error: {
+            type: "invalid_request_error",
+            message: "anthropic-version: header is required",
+          },
+          request_id: "req_f6b_required_version",
+        },
+      };
+      for (const [caseId, surface] of [
+        ["local:anthropic-messages-missing-version-enforce", "anthropic-native-errors"],
+        ["local:anthropic-count-missing-version-enforce", "anthropic-native-errors"],
+        ["local:anthropic-models-missing-version-enforce", "anthropic-catalog"],
+        ["local:anthropic-model-detail-missing-version-enforce", "anthropic-catalog"],
+      ]) {
+        const records = artifact.observations.filter((record) => record.caseId === caseId);
+        expect(records, caseId).toEqual([
+          { surface, caseId, expected: native, actual: native, matched: true },
+        ]);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 90_000);
+
   it.each([
     { name: "safe control", boundary: "emitter", canary: "" },
     ...credentialCases.flatMap(({ name, canary }) => [
@@ -503,6 +608,47 @@ describe.skipIf(child)("live observation collector transport", () => {
       ...valid,
       surface: "gemini",
     });
+  });
+
+  it("preserves missing-version local acceptance and vendor diagnostic differences offline", () => {
+    const local = {
+      status: 400,
+      body: {
+        type: "error",
+        error: { type: "invalid_request_error", message: "anthropic-version: header is required" },
+      },
+    };
+    const vendor = {
+      status: 400,
+      body: {
+        type: "error",
+        error: { type: "invalid_request_error", message: "offline provider diagnostic" },
+        request_id: "offline-request-id",
+      },
+    };
+    for (const surface of ["anthropic-native-errors", "anthropic-catalog"]) {
+      const accepted: LiveObservation = {
+        surface,
+        caseId: "local:missing-version-enforce",
+        expected: local,
+        actual: local,
+        matched: true,
+      };
+      const mismatch: LiveObservation = {
+        surface,
+        caseId: "vendor:missing-version-enforce",
+        expected: vendor,
+        actual: local,
+        matched: false,
+      };
+      expect(parseLiveObservation(line(accepted))).toEqual(accepted);
+      expect(parseLiveObservation(line(mismatch))).toEqual(mismatch);
+      const unavailable: LiveObservation = {
+        ...mismatch,
+        expected: { status: 503, body: "<html>offline unavailable</html>\r\n" },
+      };
+      expect(parseLiveObservation(line(unavailable))).toEqual(unavailable);
+    }
   });
 
   it.each([

@@ -45,11 +45,31 @@ const nativeCountRequest = {
   messages: [{ role: "user", content: "abcd" }],
 };
 let nativeAuthServer: GoldenServer;
+let nativeVersionServer: GoldenServer;
+const nativeVersionCases = [
+  { path: "/v1/messages", caseId: "anthropic-messages-missing-version-enforce" },
+  { path: "/v1/messages/count_tokens", caseId: "anthropic-count-missing-version-enforce" },
+] as const;
+const nativeVersionExpected: ObservedResponse = {
+  status: 400,
+  body: {
+    type: "error",
+    error: { type: "invalid_request_error", message: "anthropic-version: header is required" },
+    request_id: "req_f6b_required_version",
+  },
+};
+const nativeVersionRequest = (path: string) =>
+  path === "/v1/messages" ? { ...nativeCountRequest, max_tokens: 1 } : nativeCountRequest;
 beforeAll(async () => {
   nativeAuthServer = await startGoldenServer([], { auth: { apiKeys: ["local-native-auth"] } });
+  nativeVersionServer = await startGoldenServer([], {
+    auth: { apiKeys: ["local-native-auth"] },
+    policy: { requiredHeaders: "enforce" },
+  });
 });
 afterAll(async () => {
   await nativeAuthServer.close();
+  await nativeVersionServer.close();
 });
 
 describe("native provider Anthropic auth and missing-version local contracts", () => {
@@ -91,6 +111,33 @@ describe("native provider Anthropic auth and missing-version local contracts", (
       diffs,
       formatDriftReport(
         "Anthropic local missing-version default",
+        diffs,
+        "anthropic-native-errors",
+      ),
+    ).toEqual([]);
+  });
+  it.each(nativeVersionCases)("local enforced missing-version $path", async ({ path, caseId }) => {
+    const response = await fetch(`${nativeVersionServer.url}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-api-key": "local-native-auth",
+        "x-request-id": "req_f6b_required_version",
+      },
+      body: JSON.stringify(nativeVersionRequest(path)),
+    });
+    const actual: ObservedResponse = { status: response.status, body: await response.json() };
+    emitLiveObservation({
+      surface: "anthropic-native-errors",
+      caseId: `local:${caseId}`,
+      expected: nativeVersionExpected,
+      actual,
+    });
+    const diffs = nativeResponseDiffs(nativeVersionExpected, actual, true);
+    expect(
+      diffs,
+      formatDriftReport(
+        `Anthropic enforced missing-version ${path}`,
         diffs,
         "anthropic-native-errors",
       ),
@@ -183,6 +230,47 @@ describe.skipIf(process.env.AIMOCK_NATIVE_PROVIDER_DRIFT !== "1")(
             return { expected, actual };
           },
         );
+      },
+    );
+    describe.skipIf(!process.env.ANTHROPIC_API_KEY)(
+      "vendor missing-version compared with enforced policy",
+      () => {
+        for (const { path, caseId } of nativeVersionCases) {
+          registerNativeAnthropicObservation(
+            `Anthropic vendor enforced missing-version ${path}`,
+            `vendor:${caseId}`,
+            [401, 403, 429],
+            async () => {
+              const response = await fetch(`https://api.anthropic.com${path}`, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  "x-api-key": ANTHROPIC_API_KEY ?? "",
+                },
+                body: JSON.stringify(nativeVersionRequest(path)),
+                signal: AbortSignal.timeout(15000),
+              });
+              const expected: ObservedResponse = {
+                status: response.status,
+                body: await response
+                  .clone()
+                  .json()
+                  .catch(() => response.text()),
+              };
+              const local = await fetch(`${nativeVersionServer.url}${path}`, {
+                method: "POST",
+                headers: {
+                  "content-type": "application/json",
+                  "x-api-key": "local-native-auth",
+                  "x-request-id": "req_f6b_required_version",
+                },
+                body: JSON.stringify(nativeVersionRequest(path)),
+              });
+              const actual: ObservedResponse = { status: local.status, body: await local.json() };
+              return { expected, actual };
+            },
+          );
+        }
       },
     );
   },

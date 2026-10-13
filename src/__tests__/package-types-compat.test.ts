@@ -13,6 +13,8 @@
  * literals typed as the test plugins' `AimockHandle`, and a `Mountable` with its
  * own `setReplaySpeed` member of another type. It also holds a 1.45.1 pattern:
  * `ResponseOverrides.usage` with a provider key whose value is `unknown`.
+ * The policy consumer checks the optional policy contract through both ESM
+ * and CJS declarations, including direct handler and config overrides.
  *
  * Needs a current build (`pnpm build`; CI builds before `pnpm test`). The build
  * counts as current when every `dist/` file that `exports` and `typesVersions`
@@ -241,6 +243,39 @@ const u: unknown = 1;
 export const o: ResponseOverrides = { usage: { cache_read_input_tokens: u } };
 `;
 
+/** The approved optional policy contract, compiled in ESM and CJS consumers. */
+const POLICY_CONSUMER = `
+import {
+  LLMock,
+  createServer,
+  handleMessages,
+  startFromConfig,
+  type AimockConfig,
+  type AimockPolicy,
+  type MockServerOptions,
+} from "${PKG.name}";
+
+export const policy: AimockPolicy = { requiredHeaders: "enforce" };
+export const off: AimockPolicy = { requiredHeaders: "off" };
+export const omitted: AimockPolicy = {};
+export const options: MockServerOptions = { policy };
+export const mock = new LLMock(options);
+export const oldMock = new LLMock({});
+export const server = createServer([], options);
+export const oldServer = createServer([], {});
+export const config: AimockConfig = { llm: { policy } };
+export const oldConfig: AimockConfig = {};
+export const override: NonNullable<Parameters<typeof startFromConfig>[1]> = { policy };
+export const oldOverride: NonNullable<Parameters<typeof startFromConfig>[1]> = {};
+export const fromConfig = startFromConfig(config, override);
+export const oldFromConfig = startFromConfig(oldConfig, oldOverride);
+export function handlerDefaults(
+  defaults: Parameters<typeof handleMessages>[5],
+): Parameters<typeof handleMessages>[5] {
+  return { ...defaults, policy };
+}
+`;
+
 /** The additive MCP fakes handle of the test plugins. */
 const FAKES_HANDLE = `
 import {
@@ -354,6 +389,8 @@ describe.skipIf(BUILD_PROBLEM !== undefined && !IN_CI)(
       writeFileSync(join(consumer, "entries-cjs.cts"), ENTRY_CJS);
       writeFileSync(join(consumer, "compat-1.44.ts"), COMPAT_1_44);
       writeFileSync(join(consumer, "compat-1.45.1.ts"), COMPAT_1_45_1);
+      writeFileSync(join(consumer, "policy.ts"), POLICY_CONSUMER);
+      writeFileSync(join(consumer, "policy.cts"), POLICY_CONSUMER);
       writeFileSync(join(consumer, "fakes-handle.ts"), FAKES_HANDLE);
     }, 120_000);
 

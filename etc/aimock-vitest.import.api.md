@@ -22,6 +22,11 @@ export interface AimockHandle {
 }
 
 // @public (undocumented)
+interface AimockPolicy {
+    requiredHeaders?: "off" | "enforce";
+}
+
+// @public (undocumented)
 interface ApiKeyAuthConfig {
     // (undocumented)
     apiKeys: readonly string[];
@@ -1049,6 +1054,7 @@ export interface MockServerOptions {
     metrics?: boolean;
     misbehavior?: MisbehaviorConfig | MisbehaviorFaultId;
     openRouterVideo?: FalQueueConfig;
+    policy?: AimockPolicy;
     // (undocumented)
     port?: number;
     record?: RecordConfig;

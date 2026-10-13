@@ -325,6 +325,7 @@ jobs:
       - name: Run drift tests
         id: drift
         env:
+          AIMOCK_NATIVE_PROVIDER_DRIFT: "1"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
@@ -349,8 +350,17 @@ jobs:
             export AWS_REGION=us-west-2
             export AIMOCK_AWS_MODEL_ID="$P1_BEDROCK_MODEL_ID"
           fi
+          NATIVE_GATE="$GITHUB_WORKSPACE/.native-policy-gate.mts"
+          ruby - "$NATIVE_GATE" <<'RUBY_GATE'
+          source = File.read('.github/workflows/test-drift.yml')
+          body = source.match(/cat > "\$DELTA_FILE" <<'DELTAGATE'\n(.*?)^\s*DELTAGATE\s*$/m).captures.first
+          lines = body.lines
+          indent = lines.reject { |line| line.strip.empty? }.map { |line| line[/\A */].length }.min
+          File.write(ARGV.fetch(0), lines.map { |line| line.sub(/\A {#{indent}}/, '') }.join)
+          RUBY_GATE
+          trap 'rm -f "$NATIVE_GATE"' EXIT
           set +e
-          npx tsx scripts/drift-retry.ts
+          NATIVE_DISPOSITION_MODE=scheduled-retry npx tsx "$NATIVE_GATE"
           EXIT_CODE=$?
           set -e
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
@@ -393,6 +403,7 @@ jobs:
           name: drift-report
           path: |
             drift-report.json
+            drift-observations.json
             drift-evidence/*.json
           if-no-files-found: warn
           retention-days: 30
@@ -404,7 +415,12 @@ jobs:
       - name: Summarize drift for Slack
         id: summary
         if: always()
-        run: npx tsx scripts/drift-slack-summary.ts
+        run: |
+          if [ -f .native-policy-result.json ] && node -e 'const r = require("./.native-policy-result.json"); process.exit(r.rawExit === 2 && r.effectiveExit === 0 ? 0 : 1)'; then
+            echo 'drift_summary=Approved intentional native default-policy difference retained in raw artifacts; all four enforced comparisons passed. Other raw diagnostics remain available.' >> "$GITHUB_OUTPUT"
+          else
+            npx tsx scripts/drift-slack-summary.ts
+          fi
 
       - name: Fail if critical drift detected
         if: steps.drift.outputs.exit_code == '2'
@@ -535,7 +551,7 @@ jobs:
           # Recovery: previous was bad, now good — notify once
           elif [ "$PREV" = "failure" ]; then
             EMOJI="✅"
-            MSG="Drift tests passing again — all providers and AG-UI schema match."
+            MSG="Drift tests passing again — required checks pass.${DETAIL}"
           # Good → good — stay quiet
           else
             exit 0
@@ -727,6 +743,7 @@ jobs:
       - name: Base drift report — reuse same-UTC-day main run, else run live
         id: base
         env:
+          AIMOCK_NATIVE_PROVIDER_DRIFT: "1"
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           LIVE_LEGS_RAN: ${{ steps.preflight.outputs.live_legs_ran }}
@@ -742,6 +759,15 @@ jobs:
             echo "reused=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          NATIVE_GATE="$GITHUB_WORKSPACE/.native-policy-gate.mts"
+          ruby - "$NATIVE_GATE" <<'RUBY_GATE'
+          source = File.read('.github/workflows/test-drift.yml')
+          body = source.match(/cat > "\$DELTA_FILE" <<'DELTAGATE'\n(.*?)^\s*DELTAGATE\s*$/m).captures.first
+          lines = body.lines
+          indent = lines.reject { |line| line.strip.empty? }.map { |line| line[/\A */].length }.min
+          File.write(ARGV.fetch(0), lines.map { |line| line.sub(/\A {#{indent}}/, '') }.join)
+          RUBY_GATE
+          trap 'rm -f "$NATIVE_GATE"' EXIT
           # Attempt reuse: download the most recent successful scheduled
           # `main` run's drift-report artifact, then let isBaseReportReusable
           # (D6.1) decide if it is a trustworthy same-UTC-day baseline. On any
@@ -755,20 +781,49 @@ jobs:
           elif BASE_RUN_ID=$(gh run list \
                 --workflow="Drift Tests" --repo="$REPO" --branch=main \
                 --event=schedule --status=success --limit=1 \
-                --json databaseId --jq '.[0].databaseId // empty'); then
-            if [ -n "$BASE_RUN_ID" ]; then
+                --json databaseId,headSha --jq '.[0] | [.databaseId, .headSha] | @tsv'); then
+            BASE_RUN_SHA=$(printf '%s' "$BASE_RUN_ID" | cut -f2)
+            BASE_RUN_ID=$(printf '%s' "$BASE_RUN_ID" | cut -f1)
+            NATIVE_COMPATIBLE=false
+            if [ -n "$BASE_RUN_SHA" ] && git cat-file -e "$BASE_RUN_SHA^{commit}" 2>/dev/null; then
+              git show "$BASE_RUN_SHA:.github/workflows/test-drift.yml" > .base-producing-workflow.yml
+              if ruby - .base-producing-workflow.yml <<'RUBY_COMPAT'
+          require 'yaml'
+          workflow = YAML.load_file(ARGV.fetch(0))
+          job = workflow.fetch('jobs').fetch('drift')
+          step = job.fetch('steps').find { |item| item['name'] == 'Run drift tests' }
+          env = (workflow['env'] || {}).merge(job['env'] || {}).merge(step&.fetch('env', {}) || {})
+          exit(env['AIMOCK_NATIVE_PROVIDER_DRIFT'] == '1' ? 0 : 1)
+          RUBY_COMPAT
+              then NATIVE_COMPATIBLE=true; fi
+            fi
+            if [ -n "$BASE_RUN_ID" ] && [ "$NATIVE_COMPATIBLE" = true ]; then
+
               rm -rf ./.base-artifact
               if gh run download "$BASE_RUN_ID" --repo="$REPO" \
                     --name drift-report --dir ./.base-artifact; then
                 BASE_CONCLUSION=$(gh run view "$BASE_RUN_ID" --repo="$REPO" \
                   --json conclusion --jq '.conclusion // empty' || echo "")
-                if node --input-type=module -e '
+                if BASE_CONCLUSION="$BASE_CONCLUSION" NATIVE_GATE="$NATIVE_GATE" BASE_RUN_ID="$BASE_RUN_ID" node --import tsx --input-type=module -e '
                   import { readFileSync } from "node:fs";
                   import { isBaseReportReusable } from "./scripts/drift-delta.ts";
                   const path = "./.base-artifact/drift-report.json";
                   let report = null;
                   try { report = JSON.parse(readFileSync(path, "utf-8")); } catch {}
-                  const conclusion = report?.conclusion ?? process.env.BASE_CONCLUSION ?? "";
+                  let conclusion = report?.conclusion ?? process.env.BASE_CONCLUSION ?? "";
+                  if (conclusion === "critical") {
+                    const { spawnSync } = await import("node:child_process");
+                    const result = spawnSync(process.execPath, ["--import", "tsx", process.env.NATIVE_GATE], {
+                      env: { ...process.env, NATIVE_DISPOSITION_MODE: "cache", NATIVE_REPORT_PATH: path,
+                        NATIVE_OBSERVATIONS_PATH: "./.base-artifact/drift-observations.json",
+                        NATIVE_EVIDENCE_DIR: "./.base-artifact/drift-evidence", NATIVE_RAW_EXIT_CODE: "2" },
+                      encoding: "utf8"
+                    });
+                    if (result.status !== 0) process.exit(1);
+                    const disposition = JSON.parse(result.stdout);
+                    if (disposition.effectiveExit !== 0) process.exit(1);
+                    conclusion = "success";
+                  }
                   const genAt = report?.generatedAt ? new Date(report.generatedAt) : null;
                   const now = new Date();
                   const sameUtcDay =
@@ -777,7 +832,7 @@ jobs:
                     genAt.getUTCMonth() === now.getUTCMonth() &&
                     genAt.getUTCDate() === now.getUTCDate();
                   process.exit(isBaseReportReusable(report, conclusion, sameUtcDay) ? 0 : 1);
-                ' BASE_CONCLUSION="$BASE_CONCLUSION"; then
+                '; then
                   cp ./.base-artifact/drift-report.json drift-report-base.json
                   REUSED=true
                   echo "base: reusing same-UTC-day main scheduled report (run $BASE_RUN_ID)"
@@ -853,6 +908,7 @@ jobs:
       - name: Head drift report — run live on PR ref
         env:
           LIVE_LEGS_RAN: ${{ steps.preflight.outputs.live_legs_ran }}
+          AIMOCK_NATIVE_PROVIDER_DRIFT: "1"
         run: |
           set -uo pipefail
           if [ "${LIVE_LEGS_RAN:-true}" != "true" ]; then
@@ -966,15 +1022,172 @@ jobs:
           DELTA_FILE="$GITHUB_WORKSPACE/.drift-delta-gate.mts"
           trap 'rm -f "$DELTA_FILE"' EXIT
           cat > "$DELTA_FILE" <<'DELTAGATE'
-          import { readFileSync, appendFileSync } from "node:fs";
+          import { readFileSync, appendFileSync, readdirSync, writeFileSync } from "node:fs";
+          import { spawnSync } from "node:child_process";
+          import { fileURLToPath } from "node:url";
+          import { retryUntilStable, DEFAULT_MAX_ATTEMPTS, DEFAULT_BACKOFF_MS } from "./scripts/drift-retry.js";
           import { computeDelta } from "./scripts/drift-delta.js";
           import type { DeltaKey } from "./scripts/drift-delta.js";
 
+          import { join } from "node:path";
+          import { isDeepStrictEqual } from "node:util";
+          import { nativeResponseDiffs } from "./src/__tests__/drift/sdk-shapes.js";
+          import type { ObservedResponse } from "./src/__tests__/drift/live-observations.js";
+
           const read = (p: string) => JSON.parse(readFileSync(p, "utf-8"));
+
+          const object = (value: unknown): Record<string, unknown> => {
+            if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid native artifact object");
+            return value as Record<string, unknown>;
+          };
+          const observed = (value: unknown): ObservedResponse => {
+            const row = object(value);
+            if (!Number.isInteger(row.status) || !("body" in row)) throw new Error("Invalid native response receipt");
+            return { status: row.status as number, body: row.body as ObservedResponse["body"] };
+          };
+          const nativeError = (response: ObservedResponse) => {
+            const body = object(response.body);
+            const error = object(body.error);
+            if (response.status !== 400 || body.type !== "error" || error.type !== "invalid_request_error" ||
+                error.message !== "anthropic-version: header is required" ||
+                !isDeepStrictEqual(Object.keys(error).sort(), ["message", "type"]) ||
+                !isDeepStrictEqual(Object.keys(body).filter((key) => key !== "request_id").sort(), ["error", "type"]) ||
+                ("request_id" in body && typeof body.request_id !== "string")) throw new Error("Unexpected vendor missing-version response");
+          };
+          const requiredLocalNativeStrings = (expected: ObservedResponse, actual: ObservedResponse) => {
+            const expectedBody = object(expected.body);
+            const body = object(actual.body);
+            const error = object(body.error);
+            if (typeof error.message !== "string" ||
+                ((typeof expectedBody.request_id === "string" || "request_id" in body) && typeof body.request_id !== "string"))
+              throw new Error("Required local native string field is missing or has a non-string value");
+          };
+          const normalizeDiff = (value: unknown) => {
+            const diff = object(value);
+            if (Object.keys(diff).some((key) => !["severity", "issue", "path", "expected", "real", "mock", "id"].includes(key)) ||
+                ("id" in diff && diff.id !== diff.path)) throw new Error("Unexpected native diff metadata");
+            return JSON.stringify([diff.severity, diff.issue, diff.path, diff.expected, diff.real, diff.mock]);
+          };
+          const classifyNative = (reportPath: string, observationPath: string, evidenceDir: string) => {
+            const report = object(read(reportPath));
+            const artifact = object(read(observationPath));
+            if (typeof report.generatedAt !== "string" || report.generatedAt !== artifact.generatedAt || !Array.isArray(artifact.observations) || !Array.isArray(report.entries))
+              throw new Error("Unbound native report/observations");
+            const invocations = readdirSync(evidenceDir).filter((name) => name.endsWith(".json")).map((name) => object(read(join(evidenceDir, name))))
+              .filter((value) => value.schemaVersion === 1 && typeof value.invocationId === "string")
+              .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+            const invocation = invocations.at(-1);
+            if (!invocation || typeof invocation.timestamp !== "string" || invocation.timestamp > report.generatedAt ||
+                invocations.filter((value) => value.timestamp === invocation.timestamp).length !== 1) throw new Error("Ambiguous final collector invocation");
+            if (process.env.BASE_RUN_ID && String(invocation.githubRunId) !== process.env.BASE_RUN_ID) throw new Error("Cached invocation belongs to another run");
+            const drift = object(invocation.drift);
+            const agui = object(invocation.agui);
+            if (drift.availability !== "available" || agui.availability !== "available" || agui.exitCode !== 0 ||
+                !Array.isArray(drift.assertions)) throw new Error("Incomplete native/AG-UI invocation");
+            const rows = artifact.observations.map(object);
+            const receipt = (id: string, surface: string) => {
+              const matches = rows.filter((row) => row.caseId === id && row.surface === surface);
+              if (matches.length !== 1 || rows.filter((row) => row.caseId === id).length !== 1) throw new Error(`Missing/duplicate native receipt ${id}`);
+              return { expected: observed(matches[0].expected), actual: observed(matches[0].actual) };
+            };
+            const enforced = [
+              ["anthropic-messages-missing-version-enforce", "anthropic-native-errors", "Anthropic vendor enforced missing-version /v1/messages comparison"],
+              ["anthropic-count-missing-version-enforce", "anthropic-native-errors", "Anthropic vendor enforced missing-version /v1/messages/count_tokens comparison"],
+              ["anthropic-models-missing-version-enforce", "anthropic-catalog", "Anthropic catalog vendor enforced missing-version /v1/models comparison"],
+              ["anthropic-model-detail-missing-version-enforce", "anthropic-catalog", "Anthropic catalog vendor enforced missing-version /v1/models/claude-sonnet-4-5 comparison"]
+            ];
+            for (const [id, surface, title] of enforced) {
+              const row = receipt(`vendor:${id}`, surface);
+              nativeError(row.expected);
+              requiredLocalNativeStrings(row.expected, row.actual);
+              const assertions = drift.assertions.map(object).filter((value) => value.title === title);
+              if (nativeResponseDiffs(row.expected, row.actual).length !== 0 || assertions.length !== 1 || assertions[0].status !== "passed")
+                throw new Error(`Enforced native comparison did not pass: ${id}`);
+            }
+            const row = receipt("vendor:anthropic-missing-version", "anthropic-native-errors");
+            nativeError(row.expected);
+            if (row.actual.status !== 200 || !isDeepStrictEqual(row.actual.body, { input_tokens: 1 })) throw new Error("Unexpected default-policy response");
+            const entries = report.entries.map(object);
+            const intentional = entries.filter((entry) => entry.provider === "Anthropic native authentication and version" && entry.scenario === "intentional default divergence");
+            if (intentional.length !== 1 || intentional[0].builderFile !== "src/response/errors.ts" ||
+                !isDeepStrictEqual(intentional[0].builderFunctions, ["renderError"]) || !Array.isArray(intentional[0].diffs)) throw new Error("Missing/ambiguous intentional native report entry");
+            const expectedDiffs = nativeResponseDiffs(row.expected, row.actual).map(normalizeDiff).sort();
+            if (!isDeepStrictEqual(intentional[0].diffs.map(normalizeDiff).sort(), expectedDiffs)) throw new Error("Intentional entry does not match complete received diffs");
+            const defaultAssertions = drift.assertions.map(object).filter((value) => value.title === "Anthropic vendor missing-version (intentional default divergence) comparison");
+            if (defaultAssertions.length !== 1 || defaultAssertions[0].status !== "failed") throw new Error("Intentional comparison invocation mismatch");
+            const hasOtherCritical = entries.filter((entry) => entry !== intentional[0]).some((entry) => Array.isArray(entry.diffs) && entry.diffs.some((diff) => object(diff).severity === "critical"));
+            const quarantineCount = Array.isArray(report.quarantine) ? report.quarantine.length : 0;
+            const timeoutCount = Array.isArray(report.timeouts) ? report.timeouts.length : 0;
+            const keys = new Set((intentional[0].diffs as unknown[]).map((value) => String(object(value).id ?? object(value).path)));
+            return { effectiveExit: hasOtherCritical ? 2 : quarantineCount > 0 ? 5 : timeoutCount > 0 ? 6 : 0, invocationId: invocation.invocationId, keys };
+          };
+          const mode = process.env.NATIVE_DISPOSITION_MODE ?? "delta";
+          if (mode === "scheduled-retry") {
+            const result = retryUntilStable({
+              maxAttempts: DEFAULT_MAX_ATTEMPTS,
+              backoffMs: DEFAULT_BACKOFF_MS,
+              runCollector: () => {
+                const collector = spawnSync(process.execPath,
+                  ["--import", "tsx", "scripts/drift-report-collector.ts"],
+                  { stdio: "inherit" });
+                const rawExit = collector.error ? 1 : collector.status ?? 1;
+                const graded = spawnSync(process.execPath,
+                  ["--import", "tsx", fileURLToPath(import.meta.url)], {
+                    env: { ...process.env, NATIVE_DISPOSITION_MODE: "scheduled",
+                      NATIVE_RAW_EXIT_CODE: String(rawExit) },
+                    encoding: "utf8"
+                  });
+                if (graded.stderr) process.stderr.write(graded.stderr);
+                if (graded.error || graded.status !== 0) {
+                  console.error("[drift-retry] Native disposition process failed.");
+                  return 1;
+                }
+                const disposition = object(JSON.parse(graded.stdout));
+                const effectiveExit = disposition.effectiveExit;
+                if (typeof effectiveExit !== "number" || !Number.isInteger(effectiveExit))
+                  throw new Error("Native disposition exit is unavailable");
+                writeFileSync(".native-policy-result.json", graded.stdout);
+                console.log(`[drift-retry] Collector raw exit ${rawExit}; ` +
+                  `strict native effective exit ${effectiveExit}.`);
+                return effectiveExit;
+              },
+              sleep: (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+              log: (message) => console.log(`[drift-retry] ${message}`)
+            });
+            if (result.exitCode === 2 && process.env.GITHUB_OUTPUT)
+              appendFileSync(process.env.GITHUB_OUTPUT,
+                `drift_runs=${result.criticalRuns}\n`);
+            process.exit(result.exitCode);
+          }
+          if (mode !== "delta") {
+            try {
+              const disposition = classifyNative(process.env.NATIVE_REPORT_PATH ?? "drift-report.json",
+                process.env.NATIVE_OBSERVATIONS_PATH ?? "drift-observations.json", process.env.NATIVE_EVIDENCE_DIR ?? "drift-evidence");
+              const rawExit = Number(process.env.NATIVE_RAW_EXIT_CODE);
+              const effectiveExit = rawExit === 2 ? disposition.effectiveExit : rawExit;
+              console.log(JSON.stringify({ rawExit, effectiveExit, invocationId: disposition.invocationId, policy: "validated intentional default divergence" }));
+              process.exit(mode === "cache" && effectiveExit !== 0 ? 1 : 0);
+            } catch (error) {
+              console.error(`Native disposition unavailable: ${String(error)}`);
+              if (mode === "cache") process.exit(1);
+              const rawExit = Number(process.env.NATIVE_RAW_EXIT_CODE);
+              console.log(JSON.stringify({ rawExit, effectiveExit: [1, 5, 6].includes(rawExit) ? rawExit : 1 }));
+              process.exit(0);
+            }
+          }
           const base = read("drift-report-base.json");
           const head = read("drift-report-head.json");
 
-          const { block, advisory, fixed } = computeDelta(base, head);
+          const { block: originalBlock, advisory, fixed } = computeDelta(base, head);
+          let block = originalBlock;
+          if (process.env.ANTHROPIC_API_KEY) {
+            const native = classifyNative("drift-report-head.json", "drift-observations-head.json", process.env.NATIVE_EVIDENCE_DIR ?? "drift-evidence");
+            const intentional = block.filter((key) => key.provider === "Anthropic native authentication and version" &&
+              key.scenario === "intentional default divergence" && native.keys.has(key.id));
+            block = block.filter((key) => !intentional.includes(key));
+            advisory.push(...intentional);
+            console.log(`::notice title=intentional native policy::${intentional.length} validated default-policy keys retained in raw artifacts`);
+          }
           const fmt = (k: DeltaKey) =>
             `${k.provider} ${k.id}${k.class ? ` [${k.class}]` : ""}`;
 

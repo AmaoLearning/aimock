@@ -136,6 +136,7 @@ const STRIP_HEADERS = new Set([
   // prefix in buildForwardHeaders below.
   "x-test-id",
   "x-aimock-strict",
+  "x-aimock-policy",
   "x-aimock-context",
 ]);
 

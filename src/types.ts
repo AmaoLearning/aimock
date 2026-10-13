@@ -1460,6 +1460,11 @@ export interface FalRecordConfig {
 /** See {@link MockServerOptions.responsesTools}. */
 export type ResponsesToolsMode = "legacy" | "extended";
 
+export interface AimockPolicy {
+  /** Reject requests missing a provider's required headers. Default "off"; independent of strict. */
+  requiredHeaders?: "off" | "enforce";
+}
+
 export interface MockServerOptions {
   live?: LiveOptions;
   /** Optional inbound test-client access keys. Omit to preserve permissive behavior. */
@@ -1490,6 +1495,8 @@ export interface MockServerOptions {
   metrics?: boolean;
   /** Strict mode: return 503 instead of 404 when no fixture matches. */
   strict?: boolean;
+  /** Optional request policy. Invalid entries warn and are ignored. */
+  policy?: AimockPolicy;
   /**
    * Reject fixture tool calls whose `arguments` are not valid JSON instead of
    * serving them as `{}`. Off by default (the 1.44.0 behavior). When on, wires
@@ -1655,6 +1662,8 @@ export interface HandlerDefaults {
   registry?: MetricsRegistry;
   record?: RecordConfig;
   strict?: boolean;
+  /** See {@link MockServerOptions.policy}. Request headers override each valid key. */
+  policy?: AimockPolicy;
   /** See {@link MockServerOptions.strictToolArguments}. */
   strictToolArguments?: boolean;
   /** See {@link MockServerOptions.responsesTools}. Absent means `"legacy"`. */

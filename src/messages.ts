@@ -8,6 +8,8 @@
 
 import type * as http from "node:http";
 import { renderError } from "./response/errors.js";
+import { resolvePolicy } from "./response/policy.js";
+import { missingRequiredHeader } from "./response/profiles.js";
 import type {
   ChatCompletionRequest,
   ChatMessage,
@@ -36,6 +38,7 @@ import {
   isErrorResponse,
   resolveFixtureBlockOutcome,
   flattenHeaders,
+  resolveRequestId,
   isJsonObject,
   getTestId,
   resolveResponse,
@@ -1451,6 +1454,39 @@ export async function handleMessages(
 ): Promise<void> {
   const { logger } = defaults;
   setCorsHeaders(res);
+
+  // Resolve here so exported direct calls obey the same policy as server routes.
+  const policy = resolvePolicy(defaults, req.headers);
+  const missingHeader =
+    policy.requiredHeaders === "enforce"
+      ? missingRequiredHeader("messages", req.headers)
+      : undefined;
+  if (missingHeader) {
+    const { id: requestId } = resolveRequestId(req.headers);
+    req.headers["x-request-id"] = requestId;
+    res.setHeader("X-Request-Id", requestId);
+    journal.add({
+      method: req.method ?? "POST",
+      path: req.url ?? "/v1/messages",
+      headers: flattenHeaders(req.headers),
+      body: null,
+      response: {
+        status: 400,
+        fixture: null,
+        source: "internal",
+        ...strictOverrideField(defaults.strict, req.headers),
+      },
+    });
+    writeErrorResponse(
+      res,
+      400,
+      renderError("messages", "thinking", {
+        message: `${missingHeader}: header is required`,
+        requestId,
+      }).body,
+    );
+    return;
+  }
 
   let claudeReq: ClaudeRequest;
   try {

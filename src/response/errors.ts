@@ -20,6 +20,8 @@ export interface ErrorDetails {
   message: string;
   type?: string | null;
   param?: string | null;
+  /** Normalized correlation metadata explicitly supplied by native header-policy rejects. */
+  requestId?: string;
   code?: string | null;
   bodyCode?: number;
   status?: string | null;
@@ -159,6 +161,9 @@ export function renderError(
         body: JSON.stringify({
           type: "error",
           error: { type: details.type ?? profile.validationType, message: details.message },
+          ...(wire === "messages" && details.requestId !== undefined
+            ? { request_id: details.requestId }
+            : {}),
         }),
       };
     case "fixture":

@@ -189,14 +189,56 @@ const geminiCatalogCases = [
   },
 ] satisfies { id: string; query: string; expected: ObservedResponse }[];
 let nativeCatalogServer: GoldenServer;
+let nativeVersionServer: GoldenServer;
+const nativeVersionCases = [
+  { path: "/v1/models", caseId: "anthropic-models-missing-version-enforce" },
+  {
+    path: "/v1/models/claude-sonnet-4-5",
+    caseId: "anthropic-model-detail-missing-version-enforce",
+  },
+] as const;
+const nativeVersionExpected: ObservedResponse = {
+  status: 400,
+  body: {
+    type: "error",
+    error: { type: "invalid_request_error", message: "anthropic-version: header is required" },
+    request_id: "req_f6b_required_version",
+  },
+};
 beforeAll(async () => {
   nativeCatalogServer = await startGoldenServer([]);
+  nativeVersionServer = await startGoldenServer([], {
+    auth: { apiKeys: ["local-native-auth"] },
+    policy: { requiredHeaders: "enforce" },
+  });
 });
 afterAll(async () => {
   await nativeCatalogServer.close();
+  await nativeVersionServer.close();
 });
 
 describe("native provider catalog local contracts", () => {
+  it.each(nativeVersionCases)("local enforced missing-version $path", async ({ path, caseId }) => {
+    const response = await fetch(`${nativeVersionServer.url}${path}`, {
+      headers: { "x-api-key": "local-native-auth", "x-request-id": "req_f6b_required_version" },
+    });
+    const actual: ObservedResponse = { status: response.status, body: await response.json() };
+    emitLiveObservation({
+      surface: "anthropic-catalog",
+      caseId: `local:${caseId}`,
+      expected: nativeVersionExpected,
+      actual,
+    });
+    const diffs = nativeResponseDiffs(nativeVersionExpected, actual, true);
+    expect(
+      diffs,
+      formatDriftReport(
+        `Anthropic catalog enforced missing-version ${path}`,
+        diffs,
+        "anthropic-catalog",
+      ),
+    ).toEqual([]);
+  });
   it.each(["different-error-envelope", "error"])(
     "compares the top-level native discriminator %s from a real response",
     async (type) => {
@@ -292,6 +334,7 @@ function registerNativeCatalogObservation(
   surface: string,
   caseId: string,
   capture: () => Promise<{ expected: ObservedResponse; actual: ObservedResponse }>,
+  allDiffs = false,
 ) {
   let captured: ReturnType<typeof capture> | undefined;
   const receive = () => (captured ??= capture());
@@ -308,7 +351,7 @@ function registerNativeCatalogObservation(
       );
     const diffs = nativeResponseDiffs(observation.expected, observation.actual);
     expect(
-      diffs.filter((diff) => diff.severity === "critical"),
+      allDiffs ? diffs : diffs.filter((diff) => diff.severity === "critical"),
       formatDriftReport(`Native catalog comparison ${id}`, diffs, surface),
     ).toEqual([]);
   });
@@ -331,6 +374,29 @@ const nativeProviderDrift = process.env.AIMOCK_NATIVE_PROVIDER_DRIFT === "1";
 describe.skipIf(!nativeProviderDrift || !process.env.ANTHROPIC_API_KEY)(
   "native provider Anthropic catalog vendor observations",
   () => {
+    for (const { path, caseId } of nativeVersionCases) {
+      registerNativeCatalogObservation(
+        `Anthropic catalog vendor enforced missing-version ${path}`,
+        "anthropic-catalog",
+        `vendor:${caseId}`,
+        async () => {
+          const response = await fetch(`https://api.anthropic.com${path}`, {
+            headers: { "x-api-key": process.env.ANTHROPIC_API_KEY ?? "" },
+            signal: AbortSignal.timeout(15000),
+          });
+          const expected = await receiveNativeCatalogResponse(response);
+          const local = await fetch(`${nativeVersionServer.url}${path}`, {
+            headers: {
+              "x-api-key": "local-native-auth",
+              "x-request-id": "req_f6b_required_version",
+            },
+          });
+          const actual: ObservedResponse = { status: local.status, body: await local.json() };
+          return { expected, actual };
+        },
+        true,
+      );
+    }
     for (const { id, query } of anthropicCatalogCases.filter(
       (item) => item.id !== "anthropic-lifecycle-retired",
     )) {

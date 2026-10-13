@@ -22,7 +22,11 @@ export function isAnthropicModelRequest(headers: IncomingHttpHeaders): boolean {
 /** Static wire facts only. Status selection and transport behavior belong to callers. */
 export const errorProfiles = {
   openai: { fixtureType: "server_error", validationType: "invalid_request_error" },
-  messages: { fixtureType: "api_error", validationType: "invalid_request_error" },
+  messages: {
+    fixtureType: "api_error",
+    validationType: "invalid_request_error",
+    requiredHeaders: ["anthropic-version"],
+  },
   bedrock: {
     fixtureType: "api_error",
     validationType: "invalid_request_error",
@@ -40,3 +44,12 @@ export const errorProfiles = {
 } as const;
 
 export type ErrorWire = keyof typeof errorProfiles;
+
+/** Bedrock's body-level version and other wire families have no header requirement. */
+export function missingRequiredHeader(
+  wire: ErrorWire,
+  headers: IncomingHttpHeaders,
+): string | undefined {
+  if (wire !== "messages") return;
+  return errorProfiles.messages.requiredHeaders.find((name) => headers[name] === undefined);
+}

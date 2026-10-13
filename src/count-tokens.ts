@@ -1,10 +1,12 @@
 import type * as http from "node:http";
 import { claudeToCompletionRequest } from "./messages.js";
 import { geminiToCompletionRequest } from "./gemini.js";
-import { flattenHeaders, isJsonObject } from "./helpers.js";
+import { flattenHeaders, isJsonObject, resolveRequestId } from "./helpers.js";
 import type { Journal } from "./journal.js";
-import type { ChatCompletionRequest } from "./types.js";
+import type { ChatCompletionRequest, HandlerDefaults } from "./types.js";
 import { renderError } from "./response/errors.js";
+import { resolvePolicy } from "./response/policy.js";
+import { missingRequiredHeader } from "./response/profiles.js";
 import { estimatePromptTokens, estimateTokens } from "./response/usage/estimate.js";
 
 type ClaudeRequest = Parameters<typeof claudeToCompletionRequest>[0];
@@ -77,10 +79,11 @@ export function handleCountTokens(
   google: boolean,
   model: string,
   journal: Journal,
+  defaults: HandlerDefaults,
   setCorsHeaders: (res: http.ServerResponse) => void,
 ): void {
   setCorsHeaders(res);
-  const reject = (message: string): void => {
+  const reject = (message: string, requestId?: string): void => {
     journal.add({
       method: req.method ?? "POST",
       path: req.url ?? "?",
@@ -90,10 +93,19 @@ export function handleCountTokens(
     });
     const rendered = google
       ? renderError("gemini", "fixture", { message, bodyCode: 400, status: "INVALID_ARGUMENT" })
-      : renderError("messages", "thinking", { message });
+      : renderError("messages", "thinking", { message, requestId });
     res.writeHead(400, { "Content-Type": "application/json", ...rendered.headers });
     res.end(rendered.body);
   };
+  const policy = resolvePolicy(defaults, req.headers);
+  const missingHeader =
+    !google && policy.requiredHeaders === "enforce"
+      ? missingRequiredHeader("messages", req.headers)
+      : undefined;
+  if (missingHeader) {
+    reject(`${missingHeader}: header is required`, resolveRequestId(req.headers).id);
+    return;
+  }
   let body: unknown;
   try {
     body = JSON.parse(raw);

@@ -193,7 +193,78 @@ curl 'http://localhost:4010/v1/models/claude-test' \
         </p>
         <p>
           Missing <code>anthropic-version</code> remains accepted by default, including with strict
-          mode. Authenticated upstream missing-version behavior was not measured.
+          mode. Use the independent policy below to enable header enforcement.
+        </p>
+
+        <h2 id="required-header-policy">Required Header Policy</h2>
+        <p>
+          Set <code>policy.requiredHeaders</code> to <code>"enforce"</code> in
+          <code>createServer</code> or <code>LLMock</code> options to require
+          <code>anthropic-version</code>. The default is <code>"off"</code>. The exported
+          <code>AimockPolicy</code> type declares this option. Config and both CLIs expose the same
+          option; see <a href="/aimock-cli#required-header-policy">aimock CLI</a>.
+        </p>
+        <div class="code-block" data-sample="inline:required-policy-api">
+          <div class="code-block-header">Opt in <span class="lang-tag">ts</span></div>
+          <pre><code>import { createServer } from "@copilotkit/aimock";
+
+const instance = await createServer([], {
+    port: 4010,
+    policy: { requiredHeaders: "enforce" },
+});</code></pre>
+        </div>
+        <p>
+          Enforcement applies to <code>POST /v1/messages</code>,
+          <code>POST /v1/messages/count_tokens</code>, and Anthropic-flavored
+          <code>GET /v1/models</code> list/detail requests. Bedrock's body-level
+          <code>anthropic_version</code> is separate.
+        </p>
+        <p>
+          Authentication runs first. A missing required header then returns 400 before thinking,
+          fixture matching, or proxy work. The policy is independent of strict mode:
+          <code>X-AIMock-Strict: false</code> does not disable enforcement.
+        </p>
+        <div class="info-box">
+          <p>
+            Shared model paths use the catalog selection described above.
+            <code>x-api-key</code> without <code>Authorization</code> selects Anthropic and can
+            trigger the version requirement. To retain the OpenAI format, send
+            <code>Authorization</code> without <code>anthropic-version</code>.
+          </p>
+        </div>
+        <div class="code-block" data-sample="inline:required-policy-reject">
+          <div class="code-block-header">Missing version <span class="lang-tag">shell</span></div>
+          <pre><code>curl http://localhost:4010/v1/messages/count_tokens \
+  -H 'content-type: application/json' \
+  -H 'x-request-id: req_policy_example' \
+  -d '{"model":"claude-test","messages":[{"role":"user","content":"hello"}]}'</code></pre>
+        </div>
+        <div class="code-block" data-sample="inline:required-policy-error">
+          <div class="code-block-header">HTTP 400 <span class="lang-tag">json</span></div>
+          <pre><code>{"type":"error","error":{"type":"invalid_request_error","message":"anthropic-version: header is required"},"request_id":"req_policy_example"}</code></pre>
+        </div>
+        <p>
+          Policy rejections include a safe <code>request_id</code> that matches the
+          <code>x-request-id</code> response header. aimock uses a valid caller ID after trimming,
+          or generates an ID when it cannot use the supplied value. This metadata addition applies
+          to policy rejection; the authentication body above retains its documented shape.
+        </p>
+        <p>
+          The request header has highest precedence. To disable enforcement for one request, send
+          <code>X-AIMock-Policy: requiredHeaders=off</code>:
+        </p>
+        <div class="code-block" data-sample="inline:required-policy-off">
+          <div class="code-block-header">Request override <span class="lang-tag">shell</span></div>
+          <pre><code>curl http://localhost:4010/v1/messages/count_tokens \
+  -H 'content-type: application/json' \
+  -H 'X-AIMock-Policy: requiredHeaders=off' \
+  -d '{"model":"claude-test","messages":[{"role":"user","content":"hello"}]}'</code></pre>
+        </div>
+        <p>
+          Earlier authenticated Anthropic captures returned 400 with the same error type and
+          diagnostic message. Local checks against those retained captures confirm the policy
+          fields; request IDs differ by request. This is not a fresh upstream comparison or a claim
+          of full vendor conformance.
         </p>
 
         <h2>Unit Test: Text Streaming</h2>

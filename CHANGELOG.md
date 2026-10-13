@@ -4,6 +4,8 @@
 
 ### Added
 
+- An independent, opt-in required-header policy accepts programmatic options, `llm.policy`, repeatable `--policy` flags on both CLIs, and `X-AIMock-Policy` request headers. Defaults remain off, including strict-only requests. Enforced Anthropic version rejection returns 400 with a safe correlated `request_id`. The recorder strips the policy header before HTTP forwarding.
+
 - Anthropic Messages and Bedrock Claude invoke responses preserve fixture cache usage, including the cache TTL breakdown. Record mode retains token counts and cache usage for replay.
 
 - Native Anthropic and Gemini model list/detail routes with provider paging and synthetic metadata. Anthropic and Gemini count routes estimate translated messages, system text, and converted tools. Counts ignore fixture usage and never proxy or record.

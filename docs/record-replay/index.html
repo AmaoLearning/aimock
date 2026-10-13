@@ -852,10 +852,17 @@ try {
               >Mock-internal control headers (meaningless — and potentially confusing or leaky — on
               a real provider's wire):</strong
             >
-            <code>x-test-id</code>, <code>x-aimock-strict</code>, <code>x-aimock-context</code>, and
-            the <code>x-aimock-chaos-*</code> prefix family
+            <code>x-test-id</code>, <code>x-aimock-strict</code>, <code>x-aimock-policy</code>,
+            <code>x-aimock-context</code>, and the <code>x-aimock-chaos-*</code> prefix family
           </li>
         </ul>
+        <p>
+          The LLM HTTP recorder strips <code>X-AIMock-Policy</code> before forwarding. With
+          <code>requiredHeaders=enforce</code>, a missing Anthropic version header returns 400
+          before proxying. Other forwarded headers and recorded response content keep their existing
+          behavior. See
+          <a href="/claude-messages#required-header-policy">Required Header Policy</a>.
+        </p>
         <p>
           <strong>Auth headers are never saved in recorded fixtures.</strong> The fixture contains
           the match criteria (derived from the last user message) and the response content — plus,
