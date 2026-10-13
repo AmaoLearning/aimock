@@ -19,6 +19,7 @@
 
 import type * as http from "node:http";
 import { renderError } from "./response/errors.js";
+import { resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
 import type {
   ChatCompletionRequest,
   ChatMessage,
@@ -45,8 +46,6 @@ import {
   resolveResponse,
   resolveFixtureBlockOutcome,
   resolveReasoningForModel,
-  resolveStrictMode,
-  strictOverrideField,
   strictNoMatchMessage,
   strictNoMatchLogLine,
   validateChatMessages,
@@ -521,7 +520,7 @@ export async function handleBedrock(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).fixtureMiss;
     if (effectiveStrict) {
       const strictStatus = 503;
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
@@ -638,7 +637,7 @@ export async function handleBedrock(
       stream: false,
       chunkSize: Math.max(1, fixture.chunkSize ?? defaults.chunkSize),
       logger,
-      strict: resolveStrictMode(defaults.strict, req.headers),
+      strict: resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
     });
     if (prepared.stream) throw new TypeError("InvokeModel requires non-stream Claude output");
     const entry = journal.add({
@@ -681,7 +680,7 @@ export async function handleBedrock(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     addResponseEntry({
@@ -744,7 +743,7 @@ export async function handleBedrock(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     addResponseEntry({
@@ -774,7 +773,7 @@ export async function handleBedrock(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     addResponseEntry({
@@ -1429,7 +1428,7 @@ export async function handleBedrockStream(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).fixtureMiss;
     if (effectiveStrict) {
       const strictStatus = 503;
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
@@ -1548,7 +1547,7 @@ export async function handleBedrockStream(
       stream: true,
       chunkSize,
       logger,
-      strict: resolveStrictMode(defaults.strict, req.headers),
+      strict: resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
     });
     if (!prepared.stream) throw new TypeError("InvokeModel stream requires Claude events");
     const entry = journal.add({
@@ -1611,7 +1610,7 @@ export async function handleBedrockStream(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     const journalEntry = addResponseEntry({
@@ -1659,7 +1658,7 @@ export async function handleBedrockStream(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     const journalEntry = addResponseEntry({
@@ -1703,7 +1702,7 @@ export async function handleBedrockStream(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     const journalEntry = addResponseEntry({

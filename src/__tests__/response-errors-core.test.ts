@@ -319,6 +319,10 @@ const fixtures: Fixture[] = [
     match: { userMessage: "tool-arguments" },
     response: { toolCalls: [{ name: "lookup", arguments: "{bad", id: "toolu_fixed_1" }] },
   },
+  {
+    match: { userMessage: "unknown-response" },
+    response: { embedding: [0.1, 0.2, 0.3] },
+  },
   { match: { userMessage: "control" }, response: { content: "Reply" } },
 ];
 const completionRoutes = [
@@ -568,6 +572,8 @@ function expectedBody(wire: Wire, id: string) {
     }
     case "transport-failure":
       return '{"error":{"message":"Proxy to upstream failed: socket hang up","type":"proxy_error"}}';
+    case "unknown-response":
+      return '{"error":{"message":"Fixture response did not match any known type","type":"server_error"}}';
     case "tool-arguments": {
       if (wire.endsWith("stream")) return undefined;
       const message =
@@ -740,6 +746,9 @@ describe.each(wires)("real %s error surfaces", (wire) => {
   });
   it("preserves non-strict misses", async () => {
     await capture("miss", wire, body(wire, "missing"), 404);
+  });
+  it("preserves unknown-response error bytes", async () => {
+    await capture("unknown-response", wire, body(wire, "unknown-response"), 500);
   });
   it.each(["default", "empty"])("preserves fixture error %s", async (variant) => {
     const got = await capture(

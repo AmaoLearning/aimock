@@ -1,0 +1,28 @@
+{
+  "got": {
+    "status": 400,
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"anthropic-version: header is required\"}}"
+  },
+  "journal": [
+    {
+      "method": "POST",
+      "path": "/v1/messages",
+      "body": null,
+      "response": {
+        "status": 400,
+        "fixture": null,
+        "source": "internal",
+        "strictOverride": false
+      },
+      "responseKeys": [
+        "status",
+        "fixture",
+        "source",
+        "strictOverride"
+      ]
+    }
+  ]
+}

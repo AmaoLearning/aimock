@@ -5,6 +5,8 @@
  * used by the fixture router, and converts fixture responses back into the
  * Gemini GenerateContent streaming (or non-streaming) format.
  */
+import { resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
+import { renderError } from "./response/errors.js";
 
 import type * as http from "node:http";
 import type {
@@ -38,9 +40,7 @@ import {
   getTestId,
   resolveFixtureBlockOutcome,
   resolveResponse,
-  resolveStrictMode,
   resolveReasoningForModel,
-  strictOverrideField,
   strictNoMatchMessage,
   strictNoMatchLogLine,
   servedToolArgs,
@@ -969,13 +969,11 @@ export async function handleGemini(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: `Malformed JSON body: ${detail}`,
-          code: 400,
-          status: "INVALID_ARGUMENT",
-        },
-      }),
+      renderError("gemini", "validation", {
+        message: `Malformed JSON body: ${detail}`,
+        bodyCode: 400,
+        status: "INVALID_ARGUMENT",
+      }).body,
     );
     return;
   }
@@ -994,13 +992,11 @@ export async function handleGemini(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: "Request body must be a JSON object",
-          code: 400,
-          status: "INVALID_ARGUMENT",
-        },
-      }),
+      renderError("gemini", "validation", {
+        message: "Request body must be a JSON object",
+        bodyCode: 400,
+        status: "INVALID_ARGUMENT",
+      }).body,
     );
     return;
   }
@@ -1018,13 +1014,11 @@ export async function handleGemini(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: `Invalid argument: ${geminiShapeError}`,
-          code: 400,
-          status: "INVALID_ARGUMENT",
-        },
-      }),
+      renderError("gemini", "validation", {
+        message: `Invalid argument: ${geminiShapeError}`,
+        bodyCode: 400,
+        status: "INVALID_ARGUMENT",
+      }).body,
     );
     return;
   }
@@ -1079,8 +1073,8 @@ export async function handleGemini(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
-    if (effectiveStrict) {
+    const decisions = resolveRequestDecisions(defaults.strict, req.headers);
+    if (decisions.fixtureMiss) {
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
       logger.error(strictNoMatchLogLine(req.method ?? "POST", path, skippedBySequenceOrTurn));
       journal.add({
@@ -1097,18 +1091,16 @@ export async function handleGemini(
       writeErrorResponse(
         res,
         503,
-        JSON.stringify({
-          error: {
-            message: strictMessage,
-            code: 503,
-            status: "UNAVAILABLE",
-          },
-        }),
+        renderError("gemini", "strict-miss", {
+          message: strictMessage,
+          bodyCode: 503,
+          status: "UNAVAILABLE",
+        }).body,
       );
       return;
     }
 
-    if (defaults.record) {
+    if (decisions.upstream && defaults.record) {
       const outcome = await proxyAndRecord(
         req,
         res,
@@ -1145,13 +1137,11 @@ export async function handleGemini(
     writeErrorResponse(
       res,
       404,
-      JSON.stringify({
-        error: {
-          message: "No fixture matched",
-          code: 404,
-          status: "NOT_FOUND",
-        },
-      }),
+      renderError("gemini", "fixture-miss", {
+        message: "No fixture matched",
+        bodyCode: 404,
+        status: "NOT_FOUND",
+      }).body,
     );
     return;
   }
@@ -1183,13 +1173,11 @@ export async function handleGemini(
     writeErrorResponse(
       res,
       misbehavior.status,
-      JSON.stringify({
-        error: {
-          code: misbehavior.status,
-          message: misbehavior.message,
-          status: misbehavior.status === 400 ? "INVALID_ARGUMENT" : "UNIMPLEMENTED",
-        },
-      }),
+      renderError("gemini", "misbehavior", {
+        bodyCode: misbehavior.status,
+        message: misbehavior.message,
+        status: misbehavior.status === 400 ? "INVALID_ARGUMENT" : "UNIMPLEMENTED",
+      }).body,
     );
     return;
   }
@@ -1205,7 +1193,7 @@ export async function handleGemini(
       streaming,
       chunkSize,
       logger,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
     );
     const entry = journal.add({
       method: req.method ?? "POST",
@@ -1249,23 +1237,25 @@ export async function handleGemini(
       response: { status, fixture },
     });
     recordMisbehaviorOutcome({ entry: errorEntry, summary: misbehavior.summary, defaults, testId });
-    // Gemini-style error format: { error: { code, message, status } }
-    const geminiError = {
-      error: {
-        code: status,
+    writeErrorResponse(
+      res,
+      status,
+      renderError("gemini", "fixture", {
+        bodyCode: status,
         message: response.error.message,
         status: response.error.type ?? "ERROR",
-      },
-    };
-    writeErrorResponse(res, status, JSON.stringify(geminiError), {
-      retryAfter: response.retryAfter,
-    });
+      }).body,
+      { retryAfter: response.retryAfter },
+    );
     return;
   }
 
   // Audio response
   if (isAudioResponse(response)) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       model,
@@ -1320,7 +1310,10 @@ export async function handleGemini(
       logger.warn("webSearches in fixture response are not supported for Gemini API — ignoring");
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       model,
@@ -1387,7 +1380,10 @@ export async function handleGemini(
       logger.warn("webSearches in fixture response are not supported for Gemini API — ignoring");
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       model,
@@ -1443,7 +1439,10 @@ export async function handleGemini(
       logger.warn("webSearches in fixture response are not supported for Gemini API — ignoring");
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       model,
@@ -1507,12 +1506,10 @@ export async function handleGemini(
   writeErrorResponse(
     res,
     500,
-    JSON.stringify({
-      error: {
-        message: "Fixture response did not match any known type",
-        code: 500,
-        status: "INTERNAL",
-      },
-    }),
+    renderError("gemini", "unknown-response", {
+      message: "Fixture response did not match any known type",
+      bodyCode: 500,
+      status: "INTERNAL",
+    }).body,
   );
 }

@@ -1,3 +1,5 @@
+import { renderError } from "./response/errors.js";
+import { resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
 import type http from "node:http";
 import crypto from "node:crypto";
 import type {
@@ -12,14 +14,11 @@ import {
   isErrorResponse,
   isJSONResponse,
   isJsonObject,
-  serializeErrorResponse,
   flattenHeaders,
   FORMAT_TO_CONTENT_TYPE,
   getContext,
   getTestId,
   resolveResponse,
-  resolveStrictMode,
-  strictOverrideField,
   strictNoMatchMessage,
   strictNoMatchLogLine,
 } from "./helpers.js";
@@ -291,9 +290,10 @@ async function handleQueueSubmit(
       });
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: { message: `Malformed JSON: ${detail}`, type: "invalid_request_error" },
-        }),
+        renderError("openai", "validation", {
+          message: `Malformed JSON: ${detail}`,
+          type: "invalid_request_error",
+        }).body,
       );
       return;
     }
@@ -313,9 +313,10 @@ async function handleQueueSubmit(
     });
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: "Request body must be a JSON object", type: "invalid_request_error" },
-      }),
+      renderError("openai", "validation", {
+        message: "Request body must be a JSON object",
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -365,7 +366,7 @@ async function handleQueueSubmit(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).fixtureMiss;
     if (effectiveStrict) {
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
       defaults.logger.error(
@@ -384,13 +385,11 @@ async function handleQueueSubmit(
       });
       res.writeHead(503, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: {
-            message: strictMessage,
-            type: "invalid_request_error",
-            code: "no_fixture_match",
-          },
-        }),
+        renderError("openai", "strict-miss", {
+          message: strictMessage,
+          type: "invalid_request_error",
+          code: "no_fixture_match",
+        }).body,
       );
       return;
     }
@@ -423,13 +422,11 @@ async function handleQueueSubmit(
     });
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: {
-          message: "No fixture matched",
-          type: "invalid_request_error",
-          code: "no_fixture_match",
-        },
-      }),
+      renderError("openai", "fixture-miss", {
+        message: "No fixture matched",
+        type: "invalid_request_error",
+        code: "no_fixture_match",
+      }).body,
     );
     return;
   }
@@ -445,7 +442,7 @@ async function handleQueueSubmit(
       body: syntheticReq,
       response: { status, fixture },
     });
-    writeErrorResponse(res, status, serializeErrorResponse(response), {
+    writeErrorResponse(res, status, renderError("openai", "fixture", response.error).body, {
       retryAfter: response.retryAfter,
     });
     return;
@@ -471,12 +468,10 @@ async function handleQueueSubmit(
       });
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: {
-            message: "Recorded fal audio fixture has non-object json",
-            type: "server_error",
-          },
-        }),
+        renderError("openai", "unknown-response", {
+          message: "Recorded fal audio fixture has non-object json",
+          type: "server_error",
+        }).body,
       );
       return;
     }
@@ -491,9 +486,10 @@ async function handleQueueSubmit(
     });
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: "Fixture response is not an audio type", type: "server_error" },
-      }),
+      renderError("openai", "unknown-response", {
+        message: "Fixture response is not an audio type",
+        type: "server_error",
+      }).body,
     );
     return;
   }
@@ -629,9 +625,10 @@ async function tryRecordAudioQueueWalk(args: {
     });
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: `Proxy to upstream failed: ${msg}`, type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: `Proxy to upstream failed: ${msg}`,
+        type: "proxy_error",
+      }).body,
     );
     return true;
   }
@@ -649,9 +646,10 @@ async function tryRecordAudioQueueWalk(args: {
     });
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: "Upstream result body was not a JSON object", type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: "Upstream result body was not a JSON object",
+        type: "proxy_error",
+      }).body,
     );
     return true;
   }
@@ -876,9 +874,10 @@ async function handleSyncRun(
       });
       res.writeHead(400, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: { message: `Malformed JSON: ${detail}`, type: "invalid_request_error" },
-        }),
+        renderError("openai", "validation", {
+          message: `Malformed JSON: ${detail}`,
+          type: "invalid_request_error",
+        }).body,
       );
       return;
     }
@@ -898,9 +897,10 @@ async function handleSyncRun(
     });
     res.writeHead(400, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: "Request body must be a JSON object", type: "invalid_request_error" },
-      }),
+      renderError("openai", "validation", {
+        message: "Request body must be a JSON object",
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -954,7 +954,7 @@ async function handleSyncRun(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).fixtureMiss;
     if (effectiveStrict) {
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
       defaults.logger.error(
@@ -973,13 +973,11 @@ async function handleSyncRun(
       });
       res.writeHead(503, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: {
-            message: strictMessage,
-            type: "invalid_request_error",
-            code: "no_fixture_match",
-          },
-        }),
+        renderError("openai", "strict-miss", {
+          message: strictMessage,
+          type: "invalid_request_error",
+          code: "no_fixture_match",
+        }).body,
       );
       return;
     }
@@ -1020,13 +1018,11 @@ async function handleSyncRun(
     });
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: {
-          message: "No fixture matched",
-          type: "invalid_request_error",
-          code: "no_fixture_match",
-        },
-      }),
+      renderError("openai", "fixture-miss", {
+        message: "No fixture matched",
+        type: "invalid_request_error",
+        code: "no_fixture_match",
+      }).body,
     );
     return;
   }
@@ -1042,7 +1038,7 @@ async function handleSyncRun(
       body: syntheticReq,
       response: { status, fixture },
     });
-    writeErrorResponse(res, status, serializeErrorResponse(response), {
+    writeErrorResponse(res, status, renderError("openai", "fixture", response.error).body, {
       retryAfter: response.retryAfter,
     });
     return;
@@ -1070,12 +1066,10 @@ async function handleSyncRun(
       });
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: {
-            message: "Recorded fal audio fixture has non-object json",
-            type: "server_error",
-          },
-        }),
+        renderError("openai", "unknown-response", {
+          message: "Recorded fal audio fixture has non-object json",
+          type: "server_error",
+        }).body,
       );
       return;
     }
@@ -1090,9 +1084,10 @@ async function handleSyncRun(
     });
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: "Fixture response is not an audio type", type: "server_error" },
-      }),
+      renderError("openai", "unknown-response", {
+        message: "Fixture response is not an audio type",
+        type: "server_error",
+      }).body,
     );
     return;
   }

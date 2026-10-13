@@ -36,8 +36,6 @@ import {
   getTestId,
   resolveResponse,
   resolveReasoningForModel,
-  resolveStrictMode,
-  strictOverrideField,
   strictNoMatchMessage,
   strictNoMatchLogLine,
   toolArgsForWire,
@@ -52,6 +50,8 @@ import type { Journal } from "./journal.js";
 import type { Logger } from "./logger.js";
 import { mapAnthropicFinish } from "./response/finish.js";
 import { render as renderConverseUsage } from "./response/usage/codecs/converse.js";
+import { resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
+import { renderError } from "./response/errors.js";
 import { applyChaosAsync } from "./chaos.js";
 import { proxyAndRecord } from "./recorder.js";
 import { planMisbehavior, recordMisbehaviorOutcome, type MisbehaviorPlan } from "./misbehavior.js";
@@ -770,7 +770,7 @@ function prepareConverseMisbehavior(
     resolveReasoningForModel(
       "reasoning" in response ? response.reasoning : undefined,
       request.model,
-      resolveStrictMode(defaults.strict, headers),
+      resolveRequestDecisions(defaults.strict, headers).reasoningSuppression,
       defaults.logger,
     ) ??
     "";
@@ -901,12 +901,10 @@ export async function handleConverse(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: `Malformed JSON: ${detail}`,
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("bedrock", "validation", {
+        message: `Malformed JSON: ${detail}`,
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -925,12 +923,10 @@ export async function handleConverse(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: "Request body must be a JSON object",
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("bedrock", "validation", {
+        message: "Request body must be a JSON object",
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -951,12 +947,8 @@ export async function handleConverse(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: messageError,
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("bedrock", "validation", { message: messageError, type: "invalid_request_error" })
+        .body,
     );
     return;
   }
@@ -1009,7 +1001,7 @@ export async function handleConverse(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).fixtureMiss;
     if (effectiveStrict) {
       const strictStatus = 503;
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
@@ -1028,12 +1020,10 @@ export async function handleConverse(
       writeErrorResponse(
         res,
         strictStatus,
-        JSON.stringify({
-          error: {
-            message: strictMessage,
-            type: "invalid_request_error",
-          },
-        }),
+        renderError("bedrock", "strict-miss", {
+          message: strictMessage,
+          type: "invalid_request_error",
+        }).body,
       );
       return;
     }
@@ -1074,12 +1064,10 @@ export async function handleConverse(
     writeErrorResponse(
       res,
       404,
-      JSON.stringify({
-        error: {
-          message: "No fixture matched",
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("bedrock", "fixture-miss", {
+        message: "No fixture matched",
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -1115,11 +1103,11 @@ export async function handleConverse(
     writeErrorResponse(
       res,
       misbehavior.status,
-      JSON.stringify({
-        __type: type,
+      renderError("bedrock-converse", "misbehavior", {
+        type,
         message: misbehavior.message,
         code: misbehavior.code,
-      }),
+      }).body,
     );
     return;
   }
@@ -1156,16 +1144,17 @@ export async function handleConverse(
       body: completionReq,
       response: { status, fixture },
     });
-    const errBody = {
-      type: "error",
-      error: {
-        type: response.error.type ?? "invalid_request_error",
+    writeErrorResponse(
+      res,
+      status,
+      renderError("bedrock", "fixture", {
         message: response.error.message,
+        type: response.error.type ?? "invalid_request_error",
+      }).body,
+      {
+        retryAfter: response.retryAfter,
       },
-    };
-    writeErrorResponse(res, status, JSON.stringify(errBody), {
-      retryAfter: response.retryAfter,
-    });
+    );
     return;
   }
 
@@ -1180,7 +1169,7 @@ export async function handleConverse(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     addResponseEntry({
@@ -1215,7 +1204,7 @@ export async function handleConverse(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     addResponseEntry({
@@ -1242,7 +1231,7 @@ export async function handleConverse(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     addResponseEntry({
@@ -1270,12 +1259,10 @@ export async function handleConverse(
   writeErrorResponse(
     res,
     500,
-    JSON.stringify({
-      error: {
-        message: "Fixture response did not match any known type",
-        type: "server_error",
-      },
-    }),
+    renderError("bedrock", "unknown-response", {
+      message: "Fixture response did not match any known type",
+      type: "server_error",
+    }).body,
   );
 }
 
@@ -1309,12 +1296,10 @@ export async function handleConverseStream(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: `Malformed JSON: ${detail}`,
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("bedrock", "validation", {
+        message: `Malformed JSON: ${detail}`,
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -1333,12 +1318,10 @@ export async function handleConverseStream(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: "Request body must be a JSON object",
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("bedrock", "validation", {
+        message: "Request body must be a JSON object",
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -1359,12 +1342,8 @@ export async function handleConverseStream(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: messageError,
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("bedrock", "validation", { message: messageError, type: "invalid_request_error" })
+        .body,
     );
     return;
   }
@@ -1418,7 +1397,7 @@ export async function handleConverseStream(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).fixtureMiss;
     if (effectiveStrict) {
       const strictStatus = 503;
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
@@ -1437,12 +1416,10 @@ export async function handleConverseStream(
       writeErrorResponse(
         res,
         strictStatus,
-        JSON.stringify({
-          error: {
-            message: strictMessage,
-            type: "invalid_request_error",
-          },
-        }),
+        renderError("bedrock", "strict-miss", {
+          message: strictMessage,
+          type: "invalid_request_error",
+        }).body,
       );
       return;
     }
@@ -1483,12 +1460,10 @@ export async function handleConverseStream(
     writeErrorResponse(
       res,
       404,
-      JSON.stringify({
-        error: {
-          message: "No fixture matched",
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("bedrock", "fixture-miss", {
+        message: "No fixture matched",
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -1524,11 +1499,11 @@ export async function handleConverseStream(
     writeErrorResponse(
       res,
       misbehavior.status,
-      JSON.stringify({
-        __type: type,
+      renderError("bedrock-converse", "misbehavior", {
+        type,
         message: misbehavior.message,
         code: misbehavior.code,
-      }),
+      }).body,
     );
     return;
   }
@@ -1580,16 +1555,17 @@ export async function handleConverseStream(
       body: completionReq,
       response: { status, fixture },
     });
-    const errBody = {
-      type: "error",
-      error: {
-        type: response.error.type ?? "invalid_request_error",
+    writeErrorResponse(
+      res,
+      status,
+      renderError("bedrock", "fixture", {
         message: response.error.message,
+        type: response.error.type ?? "invalid_request_error",
+      }).body,
+      {
+        retryAfter: response.retryAfter,
       },
-    };
-    writeErrorResponse(res, status, JSON.stringify(errBody), {
-      retryAfter: response.retryAfter,
-    });
+    );
     return;
   }
 
@@ -1604,7 +1580,7 @@ export async function handleConverseStream(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     const journalEntry = addResponseEntry({
@@ -1653,7 +1629,7 @@ export async function handleConverseStream(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     const journalEntry = addResponseEntry({
@@ -1698,7 +1674,7 @@ export async function handleConverseStream(
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
-      resolveStrictMode(defaults.strict, req.headers),
+      resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
       logger,
     );
     const journalEntry = addResponseEntry({
@@ -1745,11 +1721,9 @@ export async function handleConverseStream(
   writeErrorResponse(
     res,
     500,
-    JSON.stringify({
-      error: {
-        message: "Fixture response did not match any known type",
-        type: "server_error",
-      },
-    }),
+    renderError("bedrock", "unknown-response", {
+      message: "Fixture response did not match any known type",
+      type: "server_error",
+    }).body,
   );
 }

@@ -6,6 +6,8 @@
  * into the Gemini Interactions format — either a single JSON response or
  * an SSE stream with event_type-based framing.
  */
+import { resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
+import { renderError } from "./response/errors.js";
 
 import type * as http from "node:http";
 import type {
@@ -33,8 +35,6 @@ import {
   getTestId,
   getContext,
   resolveResponse,
-  resolveStrictMode,
-  strictOverrideField,
   strictNoMatchMessage,
   strictNoMatchLogLine,
   resolveFixtureBlockOutcome,
@@ -461,15 +461,6 @@ export function buildInteractionsContentWithToolCallsResponse(
     output_text: outputText,
     steps,
     usage: interactionsUsage(overrides),
-  };
-}
-
-function buildInteractionsErrorResponse(message: string, code?: string): object {
-  return {
-    error: {
-      code: code ?? "INVALID_ARGUMENT",
-      message,
-    },
   };
 }
 
@@ -900,9 +891,10 @@ export async function handleGeminiInteractions(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify(
-        buildInteractionsErrorResponse(`Malformed JSON body: ${detail}`, "INVALID_ARGUMENT"),
-      ),
+      renderError("interactions", "validation", {
+        message: `Malformed JSON body: ${detail}`,
+        code: "INVALID_ARGUMENT",
+      }).body,
     );
     return;
   }
@@ -921,9 +913,10 @@ export async function handleGeminiInteractions(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify(
-        buildInteractionsErrorResponse("Request body must be a JSON object", "INVALID_ARGUMENT"),
-      ),
+      renderError("interactions", "validation", {
+        message: "Request body must be a JSON object",
+        code: "INVALID_ARGUMENT",
+      }).body,
     );
     return;
   }
@@ -942,7 +935,10 @@ export async function handleGeminiInteractions(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify(buildInteractionsErrorResponse(validationError, "INVALID_ARGUMENT")),
+      renderError("interactions", "validation", {
+        message: validationError,
+        code: "INVALID_ARGUMENT",
+      }).body,
     );
     return;
   }
@@ -996,8 +992,8 @@ export async function handleGeminiInteractions(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
-    if (effectiveStrict) {
+    const decisions = resolveRequestDecisions(defaults.strict, req.headers);
+    if (decisions.fixtureMiss) {
       const strictStatus = 503;
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
       logger.error(strictNoMatchLogLine(req.method ?? "POST", urlPath, skippedBySequenceOrTurn));
@@ -1015,11 +1011,14 @@ export async function handleGeminiInteractions(
       writeErrorResponse(
         res,
         strictStatus,
-        JSON.stringify(buildInteractionsErrorResponse(strictMessage, "UNAVAILABLE")),
+        renderError("interactions", "strict-miss", {
+          message: strictMessage,
+          code: "UNAVAILABLE",
+        }).body,
       );
       return;
     }
-    if (defaults.record) {
+    if (decisions.upstream && defaults.record) {
       const outcome = await proxyAndRecord(
         req,
         res,
@@ -1060,7 +1059,10 @@ export async function handleGeminiInteractions(
     writeErrorResponse(
       res,
       404,
-      JSON.stringify(buildInteractionsErrorResponse("No fixture matched", "NOT_FOUND")),
+      renderError("interactions", "fixture-miss", {
+        message: "No fixture matched",
+        code: "NOT_FOUND",
+      }).body,
     );
     return;
   }
@@ -1092,7 +1094,10 @@ export async function handleGeminiInteractions(
     writeErrorResponse(
       res,
       misbehavior.status,
-      JSON.stringify(buildInteractionsErrorResponse(misbehavior.message, misbehavior.code)),
+      renderError("interactions", "misbehavior", {
+        message: misbehavior.message,
+        code: misbehavior.code,
+      }).body,
     );
     return;
   }
@@ -1127,9 +1132,10 @@ export async function handleGeminiInteractions(
     writeErrorResponse(
       res,
       status,
-      JSON.stringify(
-        buildInteractionsErrorResponse(response.error.message, response.error.type ?? "ERROR"),
-      ),
+      renderError("interactions", "fixture", {
+        message: response.error.message,
+        code: response.error.type ?? "ERROR",
+      }).body,
       { retryAfter: response.retryAfter },
     );
     return;
@@ -1457,8 +1463,9 @@ export async function handleGeminiInteractions(
   writeErrorResponse(
     res,
     500,
-    JSON.stringify(
-      buildInteractionsErrorResponse("Fixture response did not match any known type", "INTERNAL"),
-    ),
+    renderError("interactions", "unknown-response", {
+      message: "Fixture response did not match any known type",
+      code: "INTERNAL",
+    }).body,
   );
 }

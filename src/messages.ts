@@ -8,7 +8,7 @@
 
 import type * as http from "node:http";
 import { renderError } from "./response/errors.js";
-import { resolvePolicy } from "./response/policy.js";
+import { resolvePolicy, resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
 import { missingRequiredHeader } from "./response/profiles.js";
 import type {
   ChatCompletionRequest,
@@ -42,10 +42,8 @@ import {
   isJsonObject,
   getTestId,
   resolveResponse,
-  resolveStrictMode,
   resolveReasoningForModel,
   resolveReasoningArtifactsForModel,
-  strictOverrideField,
   getContext,
   strictNoMatchMessage,
   strictNoMatchLogLine,
@@ -1569,7 +1567,7 @@ export async function handleMessages(
   // the real Anthropic API, which 400s on these.
   const thinkingViolation = validateThinkingInvariants(claudeReq);
   if (thinkingViolation) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).thinkingRejection;
     const violationMessage = thinkingViolationMessage(thinkingViolation);
     if (effectiveStrict) {
       logger.error(`THINKING: ${violationMessage}`);
@@ -1673,7 +1671,7 @@ export async function handleMessages(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).fixtureMiss;
     if (effectiveStrict) {
       const strictStatus = 503;
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
@@ -1794,7 +1792,7 @@ export async function handleMessages(
       stream: claudeReq.stream === true,
       chunkSize,
       logger,
-      strict: resolveStrictMode(defaults.strict, req.headers),
+      strict: resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
     });
     const entry = journal.add({
       method: req.method ?? "POST",
@@ -1861,7 +1859,10 @@ export async function handleMessages(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
@@ -1944,7 +1945,10 @@ export async function handleMessages(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
@@ -2020,7 +2024,10 @@ export async function handleMessages(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
