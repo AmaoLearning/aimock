@@ -35,20 +35,57 @@ export interface ErrorDetails {
   }[];
 }
 
-/** Common inner OpenAI error; callers retain native event wrappers and defaults. */
-export function buildOpenAIError(
-  details: Pick<ErrorDetails, "message" | "type" | "param" | "code" | "includeParam">,
-): {
+type OpenAIInnerDetails = Pick<
+  ErrorDetails,
+  "message" | "type" | "param" | "code" | "includeParam"
+>;
+type OpenAIInnerBody = {
   message: string;
   type?: string | null;
   param?: string | null;
   code?: string | null;
-} {
+};
+type ServiceValidationBody = { error: { message: string; type: string } };
+type OpenRouterErrorBody = {
+  error: { code: number; message: string; metadata?: Record<string, unknown> };
+};
+
+/** Common error owner; fixed native forms preserve caller signatures and ordering. */
+export function buildOpenAIError(details: OpenAIInnerDetails): OpenAIInnerBody;
+export function buildOpenAIError(
+  purpose: "service-validation",
+  details: { message: string },
+): ServiceValidationBody;
+export function buildOpenAIError(
+  purpose: "openrouter-error",
+  details: { code: number; message: string; metadata?: Record<string, unknown> },
+): OpenRouterErrorBody;
+export function buildOpenAIError(
+  input: OpenAIInnerDetails | "service-validation" | "openrouter-error",
+  details?: { message: string; code?: number; metadata?: Record<string, unknown> },
+): OpenAIInnerBody | ServiceValidationBody | OpenRouterErrorBody {
+  if (input === "service-validation") {
+    if (!details) throw new TypeError("Missing service validation error details");
+    return {
+      error: { message: details.message, type: errorProfiles.openai.validationType },
+    };
+  }
+  if (input === "openrouter-error") {
+    if (!details || typeof details.code !== "number")
+      throw new TypeError("Missing OpenRouter numeric error details");
+    return {
+      error: {
+        code: details.code,
+        message: details.message,
+        ...(details.metadata !== undefined && { metadata: details.metadata }),
+      },
+    };
+  }
   return {
-    message: details.message,
-    type: details.type,
-    ...(details.includeParam === true ? { param: details.param ?? null } : {}),
-    code: details.code,
+    message: input.message,
+    type: input.type,
+    ...(input.includeParam === true ? { param: input.param ?? null } : {}),
+    code: input.code,
   };
 }
 
