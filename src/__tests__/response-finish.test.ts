@@ -1,9 +1,63 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { mapAnthropicFinish } from "../response/finish.js";
+import { createServer } from "../server.js";
+
+async function requestConverseText(finishReason?: string) {
+  const instance = await createServer(
+    [
+      {
+        match: { userMessage: "hello" },
+        response: { content: "hello", ...(finishReason !== undefined && { finishReason }) },
+      },
+    ],
+    { port: 0, logLevel: "silent" },
+  );
+  const client = new BedrockRuntimeClient({
+    region: "us-east-1",
+    endpoint: instance.url,
+    credentials: { accessKeyId: "offline", secretAccessKey: "offline" },
+    requestHandler: new NodeHttpHandler(),
+    maxAttempts: 1,
+  });
+  try {
+    return await client.send(
+      new ConverseCommand({
+        modelId: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages: [{ role: "user", content: [{ text: "hello" }] }],
+      }),
+    );
+  } finally {
+    client.destroy();
+    await new Promise<void>((resolve, reject) => {
+      instance.server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+describe("Bedrock Converse caller defaults", () => {
+  it.each([undefined, ""])("uses end_turn for finishReason %j", async (reason) => {
+    const result = await requestConverseText(reason);
+    expect(result.output?.message?.content).toEqual([{ text: "hello" }]);
+    expect(result.stopReason).toBe("end_turn");
+  });
+});
+
+describe("Bedrock Converse forwarded finish reasons", () => {
+  it.each([
+    ["length", "max_tokens"],
+    ["tool_calls", "tool_use"],
+  ])("forwards finishReason %s as %s", async (reason, expected) => {
+    const result = await requestConverseText(reason);
+    expect(result.output?.message?.content).toEqual([{ text: "hello" }]);
+    expect(result.stopReason).toBe(expected);
+  });
+});
 
 describe("Anthropic finish source ownership", () => {
   it.each([

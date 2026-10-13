@@ -279,8 +279,17 @@ describe("actual Anthropic usage and finish equivalence", () => {
         expect(got.status).toBe(200);
         const bytes = serializeGolden(got);
         expect(bytes).not.toContain("cache_read_input_tokens");
-        expect(bytes).not.toContain('\\"input_tokens\\":111');
-        expect(bytes).not.toContain('\\"output_tokens\\":77');
+        const [input, output] = {
+          "empty-response": [4, 1],
+          refusal: [2, 6],
+          "reasoning-only": [4, 3],
+          "stop-length-mid-tool": [5, 4],
+        }[fault];
+        expect(bytes).toContain(
+          `\\"usage\\":{\\"input_tokens\\":${input},\\"output_tokens\\":${output}}`,
+        );
+        if (wire.endsWith("-stream"))
+          expect(bytes).toContain(`\\"usage\\":{\\"output_tokens\\":${output}}`);
         evidence(`${wire}-${fault}`, got);
       });
     }

@@ -68,6 +68,19 @@ describe("existing token estimates", () => {
       tokens: 3,
     },
     {
+      name: "multiple text parts",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "abcd" },
+            { type: "text", text: "efghi" },
+          ],
+        },
+      ],
+      tokens: 3,
+    },
+    {
       name: "multimodal",
       messages: [
         {

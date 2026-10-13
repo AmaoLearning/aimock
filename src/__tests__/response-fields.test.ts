@@ -112,6 +112,11 @@ function fixtureJson(usage: string): string {
   return `{"fixtures":[{"match":{},"response":{"content":"ok","usage":${usage}}}]}`;
 }
 
+function responseJson(body: string | undefined): unknown {
+  if (body === undefined) throw new Error("Expected a JSON response body");
+  return JSON.parse(body);
+}
+
 describe("usage field ownership", () => {
   it("validator uses the shared definitions without its own member table", () => {
     const source = sourceFile("fixture-loader.ts");
@@ -201,6 +206,11 @@ describe("real usage loading and recording equivalence", () => {
         'override "usage.completion_tokens_details.reasoning_tokens" must be a number, got object',
       ],
     ],
+    [
+      "invalid-documented-prompt-cost",
+      '{"cost_details":{"upstream_inference_prompt_cost":"bad"}}',
+      ['override "usage.cost_details.upstream_inference_prompt_cost" must be a number, got string'],
+    ],
     ["null-usage", "null", ['override "usage" must be an object']],
     [
       "zero-and-unknown-inner",
@@ -234,10 +244,11 @@ describe("real usage loading and recording equivalence", () => {
     },
   );
 
-  it("estimates unchanged usage on the real completion route", async () => {
-    const server = await startGoldenServer([{ match: {}, response: { content: "hello" } }]);
-    try {
-      for (const stream of [false, true]) {
+  it.each([false, true])(
+    "estimates unchanged usage on the real completion route (stream=%s)",
+    async (stream) => {
+      const server = await startGoldenServer([{ match: {}, response: { content: "hello" } }]);
+      try {
         const wire = await captureHttp(`${server.url}/v1/chat/completions`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -250,12 +261,28 @@ describe("real usage loading and recording equivalence", () => {
           ...(stream ? { frames: "sse" as const } : {}),
         });
         expect(wire.status).toBe(200);
+        let response: unknown;
+        if (stream) {
+          expect(wire.frames?.at(-1)).toBe("data: [DONE]");
+          const terminal = wire.frames?.at(-2);
+          if (typeof terminal !== "string" || !terminal.startsWith("data: "))
+            throw new Error("Expected a terminal SSE data frame");
+          response = responseJson(terminal.slice(6));
+          expect(response).toHaveProperty("choices", []);
+        } else {
+          response = responseJson(wire.body);
+        }
+        expect(response).toHaveProperty("usage", {
+          prompt_tokens: 3,
+          completion_tokens: 2,
+          total_tokens: 5,
+        });
         evidence(`estimate-${stream ? "stream" : "nonstream"}`, wire);
+      } finally {
+        await server.close();
       }
-    } finally {
-      await server.close();
-    }
-  });
+    },
+  );
 
   it("records real upstream usage, then reloads and replays the written fixture", async () => {
     const dir = mkdtempSync(join(tmpdir(), "aimock-u0-record-"));
@@ -298,6 +325,11 @@ describe("real usage loading and recording equivalence", () => {
       replay = await startGoldenServer(loaded);
       const replayed = await captureHttp(`${replay.url}/v1/chat/completions`, request);
       expect(replayed.status).toBe(200);
+      expect(responseJson(replayed.body)).toHaveProperty("usage", {
+        prompt_tokens: 0,
+        completion_tokens: 7,
+        total_tokens: 7,
+      });
       evidence("record-replay", replayed);
     } finally {
       await Promise.allSettled([server?.close(), replay?.close(), upstream.close()]);

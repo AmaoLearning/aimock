@@ -5,6 +5,11 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { encodeEventStreamFrame } from "../aws-event-stream.js";
+import {
+  loadFixtureFile,
+  markFixtureResponsesToolsExtended,
+  validateFixtures,
+} from "../fixture-loader.js";
 import { collapseStreamingResponse } from "../stream-collapse.js";
 import type { RecordProviderKey } from "../types.js";
 import { serializeGolden, startGoldenServer, startStubUpstream } from "./golden/harness.js";
@@ -329,7 +334,7 @@ function assertCapture<T>(id: string, value: T): T {
   return value;
 }
 
-async function record(c: Case) {
+async function record(c: Case, inspectFile?: (path: string) => void) {
   const fixturePath = mkdtempSync(join(tmpdir(), "aimock-u2-"));
   const upstream = await startStubUpstream((_req, res) => {
     res.writeHead(200, { "content-type": c.contentType });
@@ -366,6 +371,7 @@ async function record(c: Case) {
       await new Promise((done) => setTimeout(done, 10));
     }
     expect(files).toHaveLength(1);
+    inspectFile?.(join(fixturePath, files[0]!));
     const file = JSON.parse(readFileSync(join(fixturePath, files[0]!), "utf8")) as {
       fixtures: Array<Record<string, unknown>>;
     };
@@ -399,14 +405,37 @@ async function record(c: Case) {
 }
 
 describe("actual collapse preservation matrix", () => {
+  // These outcomes match the pre-refactor U2 captures, including null and empty content.
+  const expected = new Map<string, ReturnType<typeof collapseStreamingResponse>>([
+    ["openai-last-nonempty", { content: "Hello", usage }],
+    ["anthropic-omit", { content: "Hello" }],
+    ["gemini-omit", { content: "Hello" }],
+    ["ollama-omit", { content: "Hello" }],
+    ["cohere-omit", { content: "Hello" }],
+    ["invoke-omit", { content: "Hello" }],
+    ["converse-omit", { content: "Hello" }],
+    ["interactions-omit", { content: "Hello" }],
+    [
+      "transcription-separate",
+      {
+        transcription: { text: "Hello", usage: { type: "tokens", total_tokens: 17 } },
+        content: "",
+      },
+    ],
+    ["ndjson-before-provider", { content: "Hello" }],
+    ["aws-before-provider", { content: "Hello" }],
+    ["sse-unknown-fallback", { content: "Hello", usage }],
+    ["sse-mismatched-body", { content: "" }],
+    ["nonstream-contenttype", null],
+    ["bedrock-sse-invoke", { content: "Hello" }],
+  ]);
   it.each(streamCases)("$id", (c) => {
     const result = assertCapture(
       `collapse-${c.id}`,
       collapseStreamingResponse(c.contentType, c.provider, c.body),
     );
-    if (result && !["openai-last-nonempty", "sse-unknown-fallback"].includes(c.id))
-      expect(result.usage).toBeUndefined();
-    if (c.id === "openai-last-nonempty") expect(result?.usage).toEqual(usage);
+    expect(expected.has(c.id)).toBe(true);
+    expect(result).toEqual(expected.get(c.id));
   });
 });
 
@@ -429,11 +458,35 @@ describe("actual record-mode preservation matrix", () => {
         prompt_tokens_details: { cached_tokens: 0 },
       });
     } else expect(response.usage).toBeUndefined();
+    if (id === "transcription-markers" || id === "transcription-array-legacy") {
+      expect(response.transcription).toEqual({
+        text: "Hello",
+        usage: id === "transcription-array-legacy" ? [1, 2] : { type: "tokens", total_tokens: 17 },
+      });
+    }
   });
   it.each(streamCases.filter((c) => c.id !== "nonstream-contenttype"))("stream $id", async (c) => {
     // The OpenAI request route intentionally sends the selected upstream wire through
     // content-type precedence; matching provider routes are covered by recorder goldens.
-    await record({ ...c, id: `stream-${c.id}`, provider: "openai" });
+    const inspectFile = [
+      "anthropic-omit",
+      "bedrock-sse-invoke",
+      "cohere-omit",
+      "gemini-omit",
+      "interactions-omit",
+    ].includes(c.id)
+      ? (path: string) => {
+          // The pre-refactor artifacts reject these deliberate OpenAI-route mismatches.
+          for (const extended of [false, true]) {
+            const fixtures = loadFixtureFile(path);
+            if (extended) fixtures.forEach(markFixtureResponsesToolsExtended);
+            expect(validateFixtures(fixtures)).toEqual([
+              { severity: "error", fixtureIndex: 0, message: "content is empty string" },
+            ]);
+          }
+        }
+      : undefined;
+    await record({ ...c, id: `stream-${c.id}`, provider: "openai" }, inspectFile);
   });
   it.each(streamCases.slice(0, 8))("native stream $id", async (c) => {
     const file = await record(nativeRoute(c));
@@ -442,13 +495,16 @@ describe("actual record-mode preservation matrix", () => {
     expect(response.content).toBe("Hello");
   });
   it.each(["transcriptions", "translations"])("transcription operation %s", async (operation) => {
-    await record({
+    const file = await record({
       id: `operation-${operation}`,
       provider: "openai",
       path: `/v1/audio/${operation}`,
       transcription: true,
       contentType: "application/json",
       body: JSON.stringify({ text: "Hello", usage: { type: "tokens", total_tokens: 17 } }),
+    });
+    expect(file.fixtures[0]!.response).toEqual({
+      transcription: { text: "Hello", usage: { type: "tokens", total_tokens: 17 } },
     });
   });
 });
