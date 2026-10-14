@@ -249,7 +249,10 @@ export async function handleFalQueue(
   }
 
   // Unknown fal path
-  const errorBody = { error: { message: "Unknown fal.ai endpoint", type: "not_found" } };
+  const errorBody = renderError("openai", "route-failure", {
+    message: "Unknown fal.ai endpoint",
+    type: "not_found",
+  }).body;
   journal.add({
     method: req.method ?? "GET",
     path: pathname,
@@ -258,7 +261,7 @@ export async function handleFalQueue(
     response: { status: 404, fixture: null },
   });
   res.writeHead(404, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(errorBody));
+  res.end(errorBody);
 }
 
 // ─── Sub-handlers ────────────────────────────────────────────────────────
@@ -731,9 +734,10 @@ function handleQueueStatus(
     });
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: `Request ${requestId} not found`, type: "not_found" },
-      }),
+      renderError("openai", "route-failure", {
+        message: `Request ${requestId} not found`,
+        type: "not_found",
+      }).body,
     );
     return;
   }
@@ -776,9 +780,10 @@ function handleQueueResult(
     });
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: `Request ${requestId} not found`, type: "not_found" },
-      }),
+      renderError("openai", "route-failure", {
+        message: `Request ${requestId} not found`,
+        type: "not_found",
+      }).body,
     );
     return;
   }

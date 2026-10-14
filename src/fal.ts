@@ -1133,9 +1133,10 @@ async function proxyAndRecordFalQueueSubmit(args: {
     });
     res.writeHead(502, { "Content-Type": "application/json" });
     res.end(
-      JSON.stringify({
-        error: { message: `Proxy to upstream failed: ${msg}`, type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: `Proxy to upstream failed: ${msg}`,
+        type: "proxy_error",
+      }).body,
     );
     return "handled";
   }
@@ -1281,8 +1282,9 @@ function respondNotFound(
   });
   res.writeHead(404, { "Content-Type": "application/json" });
   res.end(
-    JSON.stringify({
-      error: { message: `Request ${requestId} not found`, type: "not_found" },
-    }),
+    renderError("openai", "route-failure", {
+      message: `Request ${requestId} not found`,
+      type: "not_found",
+    }).body,
   );
 }
