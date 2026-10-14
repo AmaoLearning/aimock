@@ -40,10 +40,10 @@
  *   golden fails. `vitest -u` has no effect (no vitest snapshots).
  * - Every golden written is appended, as an absolute path plus `\n`, to the
  *   file named by `GOLDEN_WRITE_LOG` when that variable is set.
- * - Comparison is byte-exact apart from the demonstrated native JSON parser
- *   diagnostic adaptation in `expectedForCurrentJsonParser`. Actual captures,
+ * - Comparison is byte-exact after `serializeGolden` normalization (see below
+ *   for placeholder numbering). Only explicitly selected native-parser body
+ *   fields may adapt the demonstrated diagnostic suffix. Actual captures,
  *   serialized bytes and golden files remain unchanged.
- *   (see there for how placeholders are numbered).
  * - One file per case: `__snapshots__/<suite>/<case>.json`.
  * - Goldens are excluded from prettier (`.prettierignore`) so a formatter can
  *   never rewrite them.
@@ -996,13 +996,7 @@ function goldenWriteEnabled(): boolean {
   );
 }
 
-/**
- * Compare `got` with `__snapshots__/<suite>/<caseName>.json`, byte for byte.
- * Fails when the file is missing. Writes the file instead of comparing only
- * under a capture run (see "Rules" in the file header), and then appends its
- * absolute path to `GOLDEN_WRITE_LOG` when set. Throws first if an open stub
- * upstream has an error not yet reported (see `startStubUpstream`).
- */
+/** Probe the local parser without changing captured diagnostics. */
 function currentMalformedJsonDiagnostic() {
   try {
     JSON.parse("{");
@@ -1014,17 +1008,69 @@ function currentMalformedJsonDiagnostic() {
 
 const malformedJsonDiagnostic = currentMalformedJsonDiagnostic();
 
-/** Adapt only the demonstrated V8 diagnostic in the expected comparison text. */
-function expectedForCurrentJsonParser(expected: string): string {
-  if (malformedJsonDiagnostic !== "Expected property name or '}' in JSON at position 1")
+/** Adapt only explicitly selected native error bodies, preserving strict bytes elsewhere. */
+function expectedForCurrentJsonParser(
+  expected: string,
+  bodyPaths: readonly (readonly (string | number)[])[],
+): string {
+  if (
+    bodyPaths.length === 0 ||
+    malformedJsonDiagnostic !== "Expected property name or '}' in JSON at position 1"
+  )
     return expected;
-  return expected.replace(
-    /Malformed JSON(?: body)?: Expected property name or '}' in JSON at position 1 \(line 1 column 2\)(?=\\*")/g,
-    (message) => message.replace(" (line 1 column 2)", ""),
-  );
+  const parsed: unknown = JSON.parse(expected);
+  if (`${JSON.stringify(parsed, null, 2)}\n` !== expected) return expected;
+  for (const path of bodyPaths) {
+    let parent: unknown = parsed;
+    for (const key of path.slice(0, -1)) {
+      if (parent === null || typeof parent !== "object") return expected;
+      parent = Object.getOwnPropertyDescriptor(parent, key)?.value;
+    }
+    const key = path.at(-1);
+    if (key === undefined || parent === null || typeof parent !== "object") return expected;
+    const descriptor = Object.getOwnPropertyDescriptor(parent, key);
+    const body: unknown = descriptor?.value;
+    if (typeof body !== "string") return expected;
+    const errorBody: unknown = JSON.parse(body);
+    if (
+      JSON.stringify(errorBody) !== body ||
+      errorBody === null ||
+      typeof errorBody !== "object" ||
+      !("error" in errorBody) ||
+      errorBody.error === null ||
+      typeof errorBody.error !== "object" ||
+      !("message" in errorBody.error)
+    )
+      return expected;
+    const message = errorBody.error.message;
+    if (
+      message !==
+        "Malformed JSON: Expected property name or '}' in JSON at position 1 (line 1 column 2)" &&
+      message !==
+        "Malformed JSON body: Expected property name or '}' in JSON at position 1 (line 1 column 2)"
+    )
+      return expected;
+    errorBody.error.message = message.replace(" (line 1 column 2)", "");
+    Object.defineProperty(parent, key, { ...descriptor, value: JSON.stringify(errorBody) });
+  }
+  return `${JSON.stringify(parsed, null, 2)}\n`;
 }
 
-export function expectGolden(suite: string, caseName: string, got: unknown): void {
+/**
+ * Compare `got` with `__snapshots__/<suite>/<caseName>.json`, byte for byte.
+ * `nativeJsonBodies` opts in only body paths from known malformed requests;
+ * it adapts their exact root error.message diagnostic on the demonstrated runtime.
+ * Fails when the file is missing. Writes the file instead of comparing only
+ * under a capture run (see "Rules" in the file header), and then appends its
+ * absolute path to `GOLDEN_WRITE_LOG` when set. Throws first if an open stub
+ * upstream has an error not yet reported (see `startStubUpstream`).
+ */
+export function expectGolden(
+  suite: string,
+  caseName: string,
+  got: unknown,
+  options?: { nativeJsonBodies: readonly (readonly (string | number)[])[] },
+): void {
   const stubErrors = [...openStubQueues].flatMap((queue) => queue.splice(0));
   if (stubErrors.length > 0) throw new Error(stubErrors.join("; "));
   const file = goldenPath(suite, caseName);
@@ -1042,6 +1088,6 @@ export function expectGolden(suite: string, caseName: string, got: unknown): voi
     );
   }
   expect(actual, `golden mismatch: ${file}`).toBe(
-    expectedForCurrentJsonParser(readFileSync(file, "utf8")),
+    expectedForCurrentJsonParser(readFileSync(file, "utf8"), options?.nativeJsonBodies ?? []),
   );
 }

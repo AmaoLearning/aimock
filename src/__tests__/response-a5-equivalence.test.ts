@@ -482,7 +482,20 @@ async function captureCase(testCase: MediaCase) {
 it("A5 real HTTP matrix preserves strict overrides, fixture polling and local upstream bytes", async () => {
   const matrix: Awaited<ReturnType<typeof captureCase>>[] = [];
   for (const testCase of cases) matrix.push(await captureCase(testCase));
-  expectGolden("response-a5", "runtime-matrix", matrix);
+  const nativeJsonBodies = matrix.flatMap((capture, caseIndex) =>
+    ["openai", "openrouter", "fal"].includes(capture.name)
+      ? capture.results.flatMap((result, resultIndex) =>
+          result !== null &&
+          typeof result === "object" &&
+          "commonErrors" in result &&
+          Array.isArray(result.commonErrors) &&
+          result.commonErrors.length > 0
+            ? [[caseIndex, "results", resultIndex, "commonErrors", 0, "body"] as const]
+            : [],
+        )
+      : [],
+  );
+  expectGolden("response-a5", "runtime-matrix", matrix, { nativeJsonBodies });
   const directory = process.env.A5_EVIDENCE_DIR;
   if (directory) {
     mkdirSync(directory, { recursive: true });

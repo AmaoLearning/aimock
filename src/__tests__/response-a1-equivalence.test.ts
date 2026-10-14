@@ -375,10 +375,12 @@ describe("A1 actual runtime equivalence", () => {
               error === "misbehavior" ? { "x-aimock-misbehavior": "typo" } : {},
             );
             expect(got.status).toBe(error === "fixture" ? 429 : 400);
-            expectGolden(suite, `${mount}-${wire.id}-error-${error}`, {
-              got,
-              journal: journalCapture(server.journal),
-            });
+            expectGolden(
+              suite,
+              `${mount}-${wire.id}-error-${error}`,
+              { got, journal: journalCapture(server.journal) },
+              error === "malformed" ? { nativeJsonBodies: [["got", "body"]] } : undefined,
+            );
           } finally {
             await server.close();
           }

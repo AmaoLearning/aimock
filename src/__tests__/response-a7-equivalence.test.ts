@@ -730,6 +730,9 @@ describe("actual A7 equivalence", () => {
         ids: matrix.map((capture) => capture.id),
       }),
     );
-    expectGolden("response-a7", "equivalence-matrix", matrix);
+    const nativeJsonBodies = matrix.flatMap((capture, rowIndex) =>
+      capture.id.endsWith("-validation-malformed") ? [[rowIndex, "wire", "body"] as const] : [],
+    );
+    expectGolden("response-a7", "equivalence-matrix", matrix, { nativeJsonBodies });
   }, 30000);
 });

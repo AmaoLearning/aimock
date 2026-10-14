@@ -994,6 +994,29 @@ describe("goldenPath", () => {
 
 describe("expectGolden", () => {
   const suite = "selftest";
+  const diagnosticLiteral =
+    "Malformed JSON: Expected property name or '}' in JSON at position 1 (line 1 column 2)";
+  async function fixtureLiteral(content: string) {
+    const server = await startGoldenServer([
+      { match: { userMessage: "literal transport" }, response: { content } },
+    ]);
+    try {
+      const captured = await captureHttp(`${server.url}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "gpt-4o",
+          messages: [{ role: "user", content: "literal transport" }],
+        }),
+      });
+      expect(captured.status).toBe(200);
+      const received: { choices: { message: { content: string } }[] } = JSON.parse(captured.body!);
+      const value = received.choices[0].message.content;
+      return { content: value, error: { message: value }, journal: [{ message: value }] };
+    } finally {
+      await server.close();
+    }
+  }
   const realSuiteDir = dirname(goldenPath(suite, "x"));
   let root: string;
   beforeAll(() => {
@@ -1016,6 +1039,68 @@ describe("expectGolden", () => {
       expect(() => expectGolden("harness", "never-captured", { a: 1 })).toThrow(/golden missing/);
     });
     expect(existsSync(file)).toBe(false);
+  });
+
+  it.each(["unchanged", "suffix-removed"] as const)(
+    "keeps fixture-authored diagnostic literals strict: %s",
+    async (name) => {
+      await withGoldenEnv({}, async () => {
+        const expected = await fixtureLiteral(diagnosticLiteral);
+        const actual =
+          name === "unchanged"
+            ? expected
+            : await fixtureLiteral(diagnosticLiteral.replace(" (line 1 column 2)", ""));
+        const file = goldenPath(suite, `literal-${name}`);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, serializeGolden(expected));
+        const compare = () => expectGolden(suite, `literal-${name}`, actual);
+        if (name === "unchanged") expect(compare).not.toThrow();
+        else expect(compare).toThrow(/golden mismatch/);
+      });
+    },
+  );
+
+  it("isolates an opted-in native body from fixture and journal literals in the same matrix", async () => {
+    await withGoldenEnv({}, async () => {
+      const fixture = await fixtureLiteral(diagnosticLiteral);
+      const server = await startGoldenServer([]);
+      try {
+        const native = await captureHttp(`${server.url}/v1/chat/completions`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        });
+        const expectedBody = JSON.stringify({
+          error: {
+            message: diagnosticLiteral,
+            type: "invalid_request_error",
+            param: null,
+            code: "invalid_json",
+          },
+        });
+        const expected = [{ body: expectedBody }, fixture, { body: expectedBody }];
+        const actual = [{ body: native.body }, fixture, { body: expectedBody }];
+        const file = goldenPath(suite, "native-literal-matrix");
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, serializeGolden(expected));
+        const options = { nativeJsonBodies: [[0, "body"]] } as const;
+        expect(() => expectGolden(suite, "native-literal-matrix", actual, options)).not.toThrow();
+        const changed = await fixtureLiteral(diagnosticLiteral.replace(" (line 1 column 2)", ""));
+        expect(() =>
+          expectGolden(suite, "native-literal-matrix", [actual[0], changed, actual[2]], options),
+        ).toThrow(/golden mismatch/);
+        expect(() =>
+          expectGolden(
+            suite,
+            "native-literal-matrix",
+            [actual[0], fixture, { body: expectedBody.replace(" (line 1 column 2)", "") }],
+            options,
+          ),
+        ).toThrow(/golden mismatch/);
+      } finally {
+        await server.close();
+      }
+    });
   });
 
   it.each([
@@ -1092,7 +1177,7 @@ describe("expectGolden", () => {
           mkdirSync(dirname(file), { recursive: true });
           const compare = (value: typeof expected) => {
             writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
-            return () => expectGolden(suite, caseName, actual);
+            return () => expectGolden(suite, caseName, actual, { nativeJsonBodies: [["body"]] });
           };
           expect(compare(expected)).not.toThrow();
           for (const differentMessage of [
