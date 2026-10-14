@@ -4,7 +4,7 @@
 
 ### Added
 
-- An independent, opt-in required-header policy accepts programmatic options, `llm.policy`, repeatable `--policy` flags on both CLIs, and `X-AIMock-Policy` request headers. Defaults remain off, including strict-only requests. Enforced Anthropic version rejection returns 400 with a safe correlated `request_id`. The recorder strips the policy header before HTTP forwarding.
+- An independent, opt-in required-header policy accepts programmatic options, `llm.policy`, repeatable `--policy` flags on both CLIs, and `X-AIMock-Policy` request headers. Defaults remain off, including strict-only requests. Enforced Anthropic version rejection returns 400 with a safe correlated `request_id`. The recorder strips the policy header before HTTP forwarding. ([#542](https://github.com/CopilotKit/aimock/pull/542))
 
 - Anthropic Messages and Bedrock Claude invoke responses preserve fixture cache usage, including the cache TTL breakdown. Record mode retains token counts and cache usage for replay.
 
