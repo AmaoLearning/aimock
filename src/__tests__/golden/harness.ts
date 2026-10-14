@@ -40,7 +40,9 @@
  *   golden fails. `vitest -u` has no effect (no vitest snapshots).
  * - Every golden written is appended, as an absolute path plus `\n`, to the
  *   file named by `GOLDEN_WRITE_LOG` when that variable is set.
- * - Comparison is byte-exact: the golden file must equal `serializeGolden(got)`
+ * - Comparison is byte-exact apart from the demonstrated native JSON parser
+ *   diagnostic adaptation in `expectedForCurrentJsonParser`. Actual captures,
+ *   serialized bytes and golden files remain unchanged.
  *   (see there for how placeholders are numbered).
  * - One file per case: `__snapshots__/<suite>/<case>.json`.
  * - Goldens are excluded from prettier (`.prettierignore`) so a formatter can
@@ -1001,6 +1003,27 @@ function goldenWriteEnabled(): boolean {
  * absolute path to `GOLDEN_WRITE_LOG` when set. Throws first if an open stub
  * upstream has an error not yet reported (see `startStubUpstream`).
  */
+function currentMalformedJsonDiagnostic() {
+  try {
+    JSON.parse("{");
+  } catch (error) {
+    if (error instanceof SyntaxError) return error.message;
+    throw error;
+  }
+}
+
+const malformedJsonDiagnostic = currentMalformedJsonDiagnostic();
+
+/** Adapt only the demonstrated V8 diagnostic in the expected comparison text. */
+function expectedForCurrentJsonParser(expected: string): string {
+  if (malformedJsonDiagnostic !== "Expected property name or '}' in JSON at position 1")
+    return expected;
+  return expected.replace(
+    /Malformed JSON(?: body)?: Expected property name or '}' in JSON at position 1 \(line 1 column 2\)(?=\\*")/g,
+    (message) => message.replace(" (line 1 column 2)", ""),
+  );
+}
+
 export function expectGolden(suite: string, caseName: string, got: unknown): void {
   const stubErrors = [...openStubQueues].flatMap((queue) => queue.splice(0));
   if (stubErrors.length > 0) throw new Error(stubErrors.join("; "));
@@ -1018,5 +1041,7 @@ export function expectGolden(suite: string, caseName: string, got: unknown): voi
       `golden missing: ${file}\nWrite it with \`pnpm golden:capture\`, then review and commit it.`,
     );
   }
-  expect(actual, `golden mismatch: ${file}`).toBe(readFileSync(file, "utf8"));
+  expect(actual, `golden mismatch: ${file}`).toBe(
+    expectedForCurrentJsonParser(readFileSync(file, "utf8")),
+  );
 }

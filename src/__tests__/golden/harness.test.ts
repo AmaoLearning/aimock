@@ -4,7 +4,15 @@
  * NDJSON, AWS event-stream and a raw-socket capture.
  */
 import { channel } from "node:diagnostics_channel";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import * as net from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1050,6 +1058,65 @@ describe("expectGolden", () => {
       rmSync(logDir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    ["a1-messages", "/v1/messages", { type: "invalid_request_error" }],
+    ["a5-byteplus", "/api/v3/contents/generations/tasks", {}],
+    [
+      "a7-chat",
+      "/v1/chat/completions",
+      { type: "invalid_request_error", param: null, code: "invalid_json" },
+    ],
+  ] as const)(
+    "compares the native malformed JSON diagnostic for %s",
+    async (name, path, fields) => {
+      await withGoldenEnv({}, async () => {
+        const instance = await startGoldenServer([]);
+        try {
+          const captured = await captureHttp(`${instance.url}${path}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: "{",
+          });
+          const actual = { path, status: captured.status, body: captured.body };
+          console.log(JSON.stringify({ proof: "native-json-diagnostic", name, ...actual }));
+          const message =
+            "Malformed JSON: Expected property name or '}' in JSON at position 1 (line 1 column 2)";
+          const expected = {
+            path: String(path),
+            status: 400,
+            body: JSON.stringify({ error: { message, ...fields } }),
+          };
+          const caseName = `native-json-${name}`;
+          const file = goldenPath(suite, caseName);
+          mkdirSync(dirname(file), { recursive: true });
+          const compare = (value: typeof expected) => {
+            writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+            return () => expectGolden(suite, caseName, actual);
+          };
+          expect(compare(expected)).not.toThrow();
+          for (const differentMessage of [
+            message.replace("Expected property name or '}'", "Unexpected token 'x'"),
+            message.replace("position 1", "position 2"),
+            message.replace("column 2", "column 3"),
+            message.replace("Malformed JSON:", "Fixture JSON:"),
+            `${message} with different meaning`,
+          ]) {
+            expect(
+              compare({
+                ...expected,
+                body: JSON.stringify({ error: { message: differentMessage, ...fields } }),
+              }),
+            ).toThrow(/golden mismatch/);
+          }
+          expect(compare({ ...expected, path: "/different-route" })).toThrow(/golden mismatch/);
+          expect(compare({ ...expected, status: 401 })).toThrow(/golden mismatch/);
+        } finally {
+          await instance.close();
+        }
+      });
+    },
+  );
 });
 
 // ─── Smoke corpus: one case per capture mode ────────────────────────────────
