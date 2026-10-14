@@ -136,7 +136,7 @@ export const SURFACE_REGISTRY: Record<string, SurfaceMapping> = {
     coverageNote:
       "Local auth and permissive missing-version behavior run always. Bounded vendor auth/version observations require AIMOCK_NATIVE_PROVIDER_DRIFT=1; missing-version also requires ANTHROPIC_API_KEY. This records intentional default-policy divergence; it does not enforce headers.",
     builderFile: "src/response/errors.ts",
-    builderFunctions: ["renderError", "writeUnauthorizedResponse"],
+    builderFunctions: ["renderError"],
     typesFile: null,
   },
   "gemini-native-auth": {
@@ -145,7 +145,7 @@ export const SURFACE_REGISTRY: Record<string, SurfaceMapping> = {
     coverageNote:
       "Local mock HTTP auth401 runs always. Bounded unauthenticated Developer API observations require AIMOCK_NATIVE_PROVIDER_DRIFT=1. Google API-key rejection may differ from the mock's configured inbound auth; no 401 vendor equivalence is assumed.",
     builderFile: "src/response/errors.ts",
-    builderFunctions: ["renderError", "writeUnauthorizedResponse"],
+    builderFunctions: ["renderError"],
     typesFile: null,
   },
   gemini: {

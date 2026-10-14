@@ -94,6 +94,754 @@ function objectFields(node: ts.Node): Map<string, ts.Expression> {
   return fields;
 }
 
+function adoptionScope(node: ts.Node): string {
+  const names: string[] = [];
+  for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
+    if (ts.isFunctionDeclaration(parent) && parent.name) names.unshift(parent.name.text);
+    if (ts.isMethodDeclaration(parent)) names.unshift(parent.name.getText());
+    if (
+      (ts.isArrowFunction(parent) || ts.isFunctionExpression(parent)) &&
+      ts.isVariableDeclaration(parent.parent)
+    )
+      names.unshift(parent.parent.name.getText());
+  }
+  return names.join("/") || "<module>";
+}
+
+function enclosingProperty(node: ts.Node, name: string): boolean {
+  for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
+    if (
+      ts.isPropertyAssignment(parent) &&
+      parent.name.getText().replace(/^['"]|['"]$/g, "") === name
+    )
+      return true;
+  }
+  return false;
+}
+
+function enclosingVariable(node: ts.Node, name: string): boolean {
+  for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) {
+    if (ts.isVariableDeclaration(parent) && parent.name.getText() === name) return true;
+  }
+  return false;
+}
+
+function jsonStringifySymbol(): ts.Symbol {
+  const context = source("src/helpers.ts");
+  const json = checker
+    .getSymbolsInScope(context, ts.SymbolFlags.Value)
+    .find((symbol) => symbol.name === "JSON");
+  const stringify =
+    json && checker.getTypeOfSymbolAtLocation(json, context).getProperty("stringify");
+  if (!stringify) throw new Error("Missing actual global JSON.stringify declaration");
+  return stringify;
+}
+
+function callTarget(expression: ts.Expression, seen = new Set<ts.Symbol>()): ts.Symbol | undefined {
+  const symbol = unalias(checker.getSymbolAtLocation(expression));
+  if (!symbol || seen.has(symbol)) return symbol;
+  seen.add(symbol);
+  const declaration = symbol.valueDeclaration;
+  if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer) {
+    const initializer = declaration.initializer;
+    if (ts.isIdentifier(initializer) || ts.isPropertyAccessExpression(initializer))
+      return callTarget(initializer, seen);
+  }
+  return symbol;
+}
+
+function errorObjectClass(
+  node: ts.ObjectLiteralExpression,
+  inner: ts.ObjectLiteralExpression,
+): string | undefined {
+  const path = relativeSource(node);
+  const scope = adoptionScope(node);
+  const outer = adoptionFields(node);
+  const fields = adoptionFields(inner);
+  const keys = [...fields.keys()].sort().join(",");
+  const type = literal(fields.get("type"));
+  const message = fields.get("message")?.getText();
+  if (
+    path === "src/fixture-loader.ts" &&
+    scope === "queueOneShotError" &&
+    enclosingVariable(node, "errorResponse") &&
+    outer.has("status") &&
+    keys === "code,message,type"
+  )
+    return "fixture injection data";
+  if (
+    path === "src/helpers.ts" &&
+    scope === "resolveMcpIdentity" &&
+    outer.get("ok")?.kind === ts.SyntaxKind.FalseKeyword &&
+    fields.has("status") &&
+    fields.has("source") &&
+    fields.has("field")
+  )
+    return "typed MCP identity result";
+  if (
+    path === "src/recorder.ts" &&
+    scope === "buildFixtureResponse" &&
+    outer.has("status") &&
+    ["message,type", "code,message,type"].includes(keys)
+  )
+    return "upstream-to-fixture data";
+  if (
+    path === "src/recorder.ts" &&
+    scope === "proxyAndRecord" &&
+    ts.isBinaryExpression(node.parent) &&
+    node.parent.left.getText() === "fixtureResponse" &&
+    outer.has("status") &&
+    keys === "code,message,type"
+  )
+    return "upstream-to-fixture assignment";
+  if (
+    path === "src/batches.ts" &&
+    scope === "finish" &&
+    outer.has("custom_id") &&
+    outer.get("response")?.kind === ts.SyntaxKind.NullKeyword &&
+    literal(fields.get("code")) === "mock_failure"
+  )
+    return "batch JSONL result data";
+  if (
+    path === "src/jsonrpc.ts" &&
+    scope === "errorResponse" &&
+    literal(outer.get("jsonrpc")) === "2.0" &&
+    outer.has("id") &&
+    keys === "code,message"
+  )
+    return "JSON-RPC protocol";
+  if (
+    path === "src/a2a-handler.ts" &&
+    scope === "createA2AMethods" &&
+    keys === "code,message" &&
+    fields.get("code")?.getText().startsWith("-32")
+  )
+    return "A2A protocol";
+  if (
+    path === "src/a2a-mock.ts" &&
+    ["handleRequest", "handleStreamingMessage"].includes(scope) &&
+    keys === "code,message" &&
+    literal(outer.get("jsonrpc")) === "2.0"
+  )
+    return "A2A JSON-RPC envelope";
+  if (
+    path === "src/mcp-recorder.ts" &&
+    scope === "answerByFake" &&
+    keys === "code,data,message" &&
+    literal(outer.get("jsonrpc")) === "2.0"
+  )
+    return "MCP JSON-RPC envelope";
+  if (
+    path === "src/fal-audio.ts" &&
+    scope === "handleQueueResult" &&
+    keys === "message,type" &&
+    type === "not_ready" &&
+    message === '"Job result not yet available"'
+  )
+    return "native pending audio lifecycle";
+  if (
+    path === "src/openrouter-video.ts" &&
+    [
+      "handleOpenRouterVideoStatus",
+      "handleOpenRouterVideoContent",
+      "handleOpenRouterVideoCreate",
+    ].includes(scope) &&
+    keys === "code,message" &&
+    ["400", "401", "404"].includes(fields.get("code")?.getText() ?? "")
+  )
+    return "native OpenRouter video numeric-code lifecycle";
+  if (
+    path === "src/veo-video.ts" &&
+    scope === "geminiError" &&
+    [...fields.keys()].join(",") === "code,message,status"
+  )
+    return "native Veo operation serializer";
+  if (
+    path === "src/veo-video.ts" &&
+    scope === "handleVeoVideoStatus" &&
+    keys === "code,message" &&
+    fields.get("code")?.getText() === "3"
+  )
+    return "native Veo failed operation";
+  if (path === "src/byteplus-video.ts" && scope === "arkErrorBody" && keys === "message")
+    return "native Ark protocol";
+  if (
+    path === "src/ws-live.ts" &&
+    scope === "handleLiveSession/fail" &&
+    keys === "category,message" &&
+    literal(outer.get("type")) === "aimock.error"
+  )
+    return "native OpenAI Live event";
+  if (
+    path === "src/ws-realtime.ts" &&
+    scope === "rejectRetiredBetaShape" &&
+    keys === "code,event_id,message,param,type" &&
+    outer.has("event_id") &&
+    literal(outer.get("type")) === "error"
+  )
+    return "native retired Realtime beta event";
+  if (
+    path === "src/ws-realtime.ts" &&
+    ["checkRealtimeFixtureToolCalls", "handleResponseCreate"].includes(scope) &&
+    keys === "code,message,type" &&
+    enclosingProperty(node, "status_details") &&
+    enclosingProperty(node, "response")
+  )
+    return "native Realtime response status details";
+  if (
+    path === "src/ws-gemini-live.ts" &&
+    ["handleWebSocketGeminiLive", "processMessage"].includes(scope) &&
+    keys === "code,message,status"
+  )
+    return "native Gemini Live event";
+  if (
+    path === "src/vector-handler.ts" &&
+    scope === "handlePinecone" &&
+    keys === "message" &&
+    message === "`Collection '${namespace}' not found`"
+  )
+    return "native Pinecone collection error";
+  return undefined;
+}
+
+function nonObjectErrorClass(
+  node: ts.ObjectLiteralExpression,
+  inner: ts.Expression,
+): string | undefined {
+  const path = relativeSource(node);
+  const scope = adoptionScope(node);
+  const firstScope = scope.split("/")[0];
+  const fields = adoptionFields(node);
+  const keys = [...fields.keys()].sort().join(",");
+  if (
+    ts.isCallExpression(inner) &&
+    unalias(checker.getSymbolAtLocation(inner.expression)) ===
+      exported("src/response/errors.ts", "buildOpenAIError")
+  )
+    return "shared typed inner builder";
+  if (
+    path === "src/recorder.ts" &&
+    ["persistFixture", "persistServiceFakes"].includes(scope) &&
+    fields.has("kind")
+  )
+    return "typed persistence outcome";
+  if (path === "src/config-loader.ts" && scope === "parsePolicyFlags" && keys === "error,ok")
+    return "CLI validation result";
+  if (
+    path === "src/files.ts" &&
+    [
+      "parseJsonUpload",
+      "parseHeaderParams",
+      "parsePart",
+      "parseMultipartUpload",
+      "singleParam",
+      "parseListQuery",
+      "bad",
+    ].includes(firstScope) &&
+    ["error", "error,param", "error,ok"].includes(keys)
+  )
+    return "typed Files parsing result";
+  if (
+    path === "src/files.ts" &&
+    enclosingVariable(node, "MALFORMED_HEADER") &&
+    keys === "error" &&
+    literal(inner) === "malformed"
+  )
+    return "typed Files header parser sentinel";
+  if (path === "src/mcp-fakes.ts" && scope === "validateCall" && keys === "error")
+    return "fake-call validation data";
+  if (
+    path === "src/response/catalog/anthropic-page.ts" &&
+    scope === "anthropicPage" &&
+    keys === "error"
+  )
+    return "catalog page validation result";
+  if (path === "src/response/catalog/gemini-page.ts" && scope === "geminiPage" && keys === "error")
+    return "catalog page validation result";
+  if (
+    ["src/gemini.ts", "src/bedrock-converse.ts"].includes(path) &&
+    ["handleGemini", "handleConverse", "handleConverseStream"].includes(scope) &&
+    keys === "error,fixture,status"
+  )
+    return "request journal response data";
+  if (
+    path === "src/server.ts" &&
+    scope === "startServer/handleHttpRequest" &&
+    keys === "error,fixture,source,status"
+  )
+    return "request journal response data";
+  if (path === "src/server.ts" && scope === "planControlApiFakes" && keys === "error,position")
+    return "control validation result";
+  if (
+    path === "src/server.ts" &&
+    [
+      "writeBlankTestId",
+      "handleControlAPI",
+      "handleControlAPI/bad",
+      "handleControlAPI/validationFailed",
+      "startServer/routeError",
+    ].includes(scope) &&
+    ["error", "error,message,rule", "details,error"].includes(keys)
+  )
+    return "native control API text envelope";
+  if (path === "src/server.ts" && scope === "startServer/handleUpgradeRequest" && keys === "error")
+    return "native websocket handshake";
+  if (
+    path === "src/grok-video.ts" &&
+    [
+      "handleGrokVideoCreate",
+      "handleGrokVideoStatus",
+      "proxyGrokVideoSubmit",
+      "proxyGrokVideoSubmit/proxyError",
+      "proxyGrokVideoRecordPoll",
+      "proxyGrokVideoRecordPoll/proxyError",
+    ].includes(scope) &&
+    keys === "code,error"
+  )
+    return "native Grok video code/text envelope";
+  if (
+    ["src/grok-video.ts", "src/veo-video.ts", "src/openrouter-video.ts"].includes(path) &&
+    [
+      "proxyGrokVideoRecordPoll",
+      "proxyVeoVideoRecordPoll",
+      "proxyOpenRouterVideoRecordPoll",
+    ].includes(scope) &&
+    keys === "error" &&
+    enclosingVariable(node, "video") &&
+    ts.isConditionalExpression(node.parent) &&
+    node.parent.whenTrue === node &&
+    ts.isSpreadAssignment(node.parent.parent.parent)
+  )
+    return "native upstream poll-error persistence";
+  if (path === "src/ollama.ts" && scope === "prepareOllamaMisbehavior" && keys === "error")
+    return "native prepared Ollama text error";
+  if (
+    path === "src/fine-tuning.ts" &&
+    scope === "handleFineTuningCreate" &&
+    fields.has("training_file") &&
+    fields.has("finished_at") &&
+    inner.kind === ts.SyntaxKind.NullKeyword
+  )
+    return "native fine-tuning lifecycle data";
+  if (
+    path === "src/batches.ts" &&
+    scope === "finish" &&
+    fields.has("custom_id") &&
+    fields.has("response")
+  )
+    return "native batch JSONL result data";
+  if (
+    path === "src/live-recorder.ts" &&
+    scope === "createLiveRecorder/finish" &&
+    keys === "category,error,kind"
+  )
+    return "live recording outcome";
+  if (path === "src/ws-live.ts" && scope === "handleLiveSession/recordJournal" && keys === "error")
+    return "live recording journal data";
+  const protocolScopes: Record<string, readonly string[]> = {
+    "src/agui-recorder.ts": ["proxyAndRecordAGUI", "teeUpstreamStream"],
+    "src/agui-mock.ts": ["handleRequest", "start"],
+    "src/mcp-handler.ts": [
+      "jsonRpcError",
+      "createMCPRequestHandler",
+      "createMCPRequestHandler/callFake",
+      "createMCPRequestHandler/rejectIdentity",
+      "createMCPRequestHandler/messageOf",
+    ],
+    "src/mcp-recorder.ts": ["handle", "forward", "relay"],
+    "src/mcp-mock.ts": ["answerMethodNotAllowed", "journalRequest"],
+    "src/mcp-fakes-report.ts": ["handleFakesReportRoute"],
+    "src/vector-handler.ts": ["handleQdrant", "handleChromaDB"],
+    "src/vector-mock.ts": ["handleRequest", "start"],
+  };
+  if (protocolScopes[path]?.includes(scope) && !fields.has("type") && !fields.has("message"))
+    return "native service/control protocol or journal data";
+  if (
+    path === "src/ws-realtime.ts" &&
+    scope === "sendLiveTranscriptionFailure" &&
+    keys === "content_index,error,item_id,type" &&
+    literal(fields.get("type")) === "conversation.item.input_audio_transcription.failed"
+  )
+    return "native transcription failure event";
+  if (
+    path === "src/ws-realtime.ts" &&
+    ["processMessage", "sendLiveTranscriptionFailure"].includes(scope) &&
+    literal(fields.get("type"))?.includes("error")
+  )
+    return "native Realtime event/transcription";
+  return undefined;
+}
+
+function productionSources(): ts.SourceFile[] {
+  return program.getSourceFiles().filter((file) => {
+    const path = relativeSource(file);
+    return path.startsWith("src/") && !path.includes("/__tests__/") && !file.isDeclarationFile;
+  });
+}
+
+function adoptionFields(node: ts.ObjectLiteralExpression): Map<string, ts.Expression> {
+  const fields = objectFields(node);
+  for (const property of node.properties) {
+    if (ts.isShorthandPropertyAssignment(property)) fields.set(property.name.text, property.name);
+  }
+  return fields;
+}
+
+describe("A8 common-envelope inventory", () => {
+  it("indexes the remaining non-object error payload flows", () => {
+    const payloads: {
+      path: string;
+      scope: string;
+      keys: string[];
+      payload: string;
+      classification?: string;
+    }[] = [];
+    for (const file of productionSources()) {
+      if (relativeSource(file) === "src/response/errors.ts") continue;
+      walk(file, (node) => {
+        if (!ts.isObjectLiteralExpression(node)) return;
+        const fields = adoptionFields(node);
+        const inner = fields.get("error");
+        if (!inner || ts.isObjectLiteralExpression(inner)) return;
+        payloads.push({
+          path: relativeSource(node),
+          scope: adoptionScope(node),
+          keys: [...fields.keys()],
+          payload: inner.getText().slice(0, 120),
+          classification: nonObjectErrorClass(node, inner),
+        });
+      });
+    }
+    const unclassified = payloads.filter((payload) => !payload.classification);
+    console.log(
+      JSON.stringify({ inventory: "A8-error-flows", total: payloads.length, unclassified }),
+    );
+    expect(
+      unclassified,
+      "non-object error fields must be assigned to actual owners, native protocols or typed data flows",
+    ).toEqual([]);
+  });
+  it("does not retain inline serializers of named top-level common templates", () => {
+    const local: string[] = [];
+    const shapes = new Set(["message", "message,type", "code,message,type", "__type,message"]);
+    const stringify = jsonStringifySymbol();
+    for (const file of productionSources()) {
+      if (relativeSource(file) === "src/response/errors.ts") continue;
+      walk(file, (node) => {
+        if (
+          !ts.isCallExpression(node) ||
+          callTarget(node.expression) !== stringify ||
+          !node.arguments[0] ||
+          !ts.isObjectLiteralExpression(node.arguments[0])
+        )
+          return;
+        const shape = [...adoptionFields(node.arguments[0]).keys()].sort().join(",");
+        if (shapes.has(shape))
+          local.push(
+            `${relativeSource(node)}#${adoptionScope(node)}:${file.getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
+          );
+      });
+    }
+    expect(local, "common top-level serializers must live in the shared owner").toEqual([]);
+  });
+  it("retains only schema references among message-free literal error objects", () => {
+    const unclassified: string[] = [];
+    let total = 0;
+    for (const file of productionSources()) {
+      if (relativeSource(file) === "src/response/errors.ts") continue;
+      walk(file, (node) => {
+        if (!ts.isObjectLiteralExpression(node)) return;
+        const inner = adoptionFields(node).get("error");
+        if (!inner || !ts.isObjectLiteralExpression(inner)) return;
+        const fields = adoptionFields(inner);
+        if (fields.has("message")) return;
+        total += 1;
+        const schema =
+          (relativeSource(node) === "src/openapi.ts" &&
+            enclosingVariable(node, "COMPONENTS") &&
+            enclosingProperty(node, "properties") &&
+            (fields.has("type") ||
+              ([...fields.keys()].join(",") === "$ref" &&
+                literal(fields.get("$ref"))?.startsWith("#/components/schemas/")))) ||
+          (relativeSource(node) === "src/live-fixture.ts" &&
+            enclosingVariable(node, "SERVER_SCHEMAS") &&
+            (literal(fields.get("type")) === "object" ||
+              ([...fields.keys()].join(",") === "$ref" &&
+                literal(fields.get("$ref"))?.startsWith("#/$defs/"))));
+        if (!schema)
+          unclassified.push(
+            `${relativeSource(node)}#${adoptionScope(node)}:${file.getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
+          );
+      });
+    }
+    console.log(JSON.stringify({ inventory: "A8-error-schemas", total, unclassified }));
+    expect(
+      unclassified,
+      "message-free error objects require explicit schema/native classification",
+    ).toEqual([]);
+  });
+  it("classifies every runtime error object with a message", () => {
+    const candidates: {
+      path: string;
+      scope: string;
+      line: number;
+      keys: string[];
+      type?: string;
+      message: string;
+      classification?: string;
+    }[] = [];
+    for (const file of productionSources()) {
+      if (relativeSource(file) === "src/response/errors.ts") continue;
+      walk(file, (node) => {
+        if (!ts.isObjectLiteralExpression(node)) return;
+        const inner = objectFields(node).get("error");
+        if (!inner || !ts.isObjectLiteralExpression(inner)) return;
+        const fields = adoptionFields(inner);
+        const message = fields.get("message");
+        if (!message) return;
+        candidates.push({
+          path: relativeSource(node),
+          scope: adoptionScope(node),
+          line: file.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+          keys: [...fields.keys()],
+          type: literal(fields.get("type")),
+          message: message.getText().slice(0, 100),
+          classification: errorObjectClass(node, inner),
+        });
+      });
+    }
+    console.log(JSON.stringify({ inventory: "A8-common-envelope", candidates }));
+    expect(
+      candidates
+        .filter((candidate) => !candidate.classification)
+        .map(({ path, scope, line }) => ({ path, scope, line })),
+      "every remaining common-like runtime envelope needs an exact semantic disposition",
+    ).toEqual([]);
+  });
+});
+
+const strictAllocation = [
+  ["P0", "helpers", 1],
+  ["P0", "mcp-recorder", 1],
+  ["A1", "messages", 9],
+  ["A1", "bedrock", 14],
+  ["A2", "responses", 6],
+  ["A2", "ws-responses", 4],
+  ["A2", "ws-realtime", 6],
+  ["A3", "gemini", 8],
+  ["A3", "gemini-interactions", 3],
+  ["A3", "ws-gemini-live", 3],
+  ["A3", "ws-live", 3],
+  ["A4", "bedrock-converse", 13],
+  ["A4", "cohere", 9],
+  ["A4", "ollama", 13],
+  ["A5", "byteplus-video", 10],
+  ["A5", "grok-video", 10],
+  ["A5", "veo-video", 10],
+  ["A5", "video", 3],
+  ["A5", "openrouter-video", 18],
+  ["A5", "fal", 3],
+  ["A6", "elevenlabs-audio", 6],
+  ["A6", "elevenlabs-voice", 10],
+  ["A6", "fal-audio", 6],
+  ["A6", "speech", 3],
+  ["A6", "transcription", 3],
+  ["A6", "images", 6],
+  ["A7", "server", 7],
+  ["A7", "embeddings", 2],
+  ["A7", "gemini-embeddings", 2],
+  ["A7", "moderation", 3],
+  ["A7", "rerank", 3],
+  ["A7", "search", 3],
+] as const;
+
+describe("A8 complete strict adoption", () => {
+  it("accounts for all32 files and201 historical calls", () => {
+    expect(strictAllocation).toHaveLength(32);
+    expect(new Set(strictAllocation.map(([, file]) => file)).size).toBe(32);
+    expect(strictAllocation.reduce((total, [, , count]) => total + count, 0)).toBe(201);
+    console.log(JSON.stringify({ audit: "A8-strict", files: 32, historicalCalls: 201 }));
+  });
+
+  it.each(strictAllocation.filter(([, file]) => file !== "helpers"))(
+    "%s %s uses the shared named decisions without old wrapper calls",
+    (_slot, file, expected) => {
+      const node = source(`src/${file}.ts`);
+      const decisions = calls(node, exported("src/response/policy.ts", "resolveRequestDecisions"));
+      const journals = calls(node, exported("src/response/policy.ts", "strictOverrideField"));
+      const legacy = ["resolveStrictMode", "strictOverrideField"].flatMap((name) =>
+        calls(node, exported("src/helpers.ts", name)),
+      );
+      expect(legacy.length).toBe(0);
+      expect(decisions.length).toBeGreaterThan(0);
+      // A1's accepted composed inventory adds F5B's required-header journal
+      // site to Messages; the historical201-call allocation remains unchanged.
+      const addedRequiredHeaderJournal = file === "messages" ? 1 : 0;
+      expect(
+        decisions.length + journals.length,
+        `${file} accepted composed policy/journal sites`,
+      ).toBe(expected + addedRequiredHeaderJournal);
+      for (const statement of node.statements) {
+        if (
+          !ts.isImportDeclaration(statement) ||
+          literal(statement.moduleSpecifier) !== "./helpers.js"
+        )
+          continue;
+        const bindings = statement.importClause?.namedBindings;
+        if (!bindings || !ts.isNamedImports(bindings)) continue;
+        expect(
+          bindings.elements
+            .filter((binding) =>
+              ["resolveStrictMode", "strictOverrideField"].includes(
+                (binding.propertyName ?? binding.name).text,
+              ),
+            )
+            .map((binding) => binding.name.text),
+        ).toEqual([]);
+      }
+    },
+  );
+
+  it("retains only forwarding wrappers and the one strict-header parser", () => {
+    for (const name of ["resolveStrictMode", "strictOverrideField"]) {
+      expect(
+        calls(named("src/helpers.ts", name), exported("src/response/policy.ts", name)).length,
+      ).toBe(1);
+    }
+    const accesses: string[] = [];
+    const data: string[] = [];
+    for (const file of productionSources())
+      walk(file, (node) => {
+        if (!ts.isStringLiteralLike(node) || node.text !== "x-aimock-strict") return;
+        if (
+          relativeSource(node) === "src/recorder.ts" &&
+          ts.isArrayLiteralExpression(node.parent)
+        ) {
+          data.push(relativeSource(node));
+          return;
+        }
+        accesses.push(`${relativeSource(node)}#${adoptionScope(node)}`);
+        expect(
+          ts.isElementAccessExpression(node.parent) && node.parent.argumentExpression === node,
+        ).toBe(true);
+      });
+    expect(accesses).toEqual(["src/response/policy.ts#resolveStrictMode"]);
+    expect(data).toEqual(["src/recorder.ts"]);
+  });
+});
+
+const commonScopeRows = [
+  ["fal", "proxyAndRecordFalQueueSubmit", "transport-failure"],
+  ["fal", "respondNotFound", "route-failure"],
+  ["fal-audio", "handleFalQueue", "route-failure"],
+  ["fal-audio", "handleQueueStatus", "route-failure"],
+  ["fal-audio", "handleQueueResult", "route-failure"],
+  ["veo-video", "proxyVeoVideoSubmit", "transport-failure"],
+  ["veo-video", "proxyVeoVideoRecordPoll", "transport-failure"],
+  ["openrouter-video", "proxyOpenRouterVideoRecordContent", "transport-failure"],
+  ["openrouter-video", "proxyOpenRouterVideoSubmit", "transport-failure"],
+  ["openrouter-video", "proxyOpenRouterVideoRecordPoll", "transport-failure"],
+  ["video", "handleVideoStatus", "route-failure"],
+  ["grok-video", "handleGrokVideoCreate", "unknown-response"],
+  ["chaos", "applyChaosAction", "misbehavior"],
+] as const;
+
+describe("A8 error-only and supplemental direct consumers", () => {
+  it("binds both accepted VectorMock wrapper guards to the existing validation owner", () => {
+    const builder = exported("src/response/errors.ts", "buildOpenAIError");
+    for (const name of ["handleRequest", "start"]) {
+      const methods: ts.MethodDeclaration[] = [];
+      walk(source("src/vector-mock.ts"), (node) => {
+        if (ts.isMethodDeclaration(node) && node.name.getText() === name) methods.push(node);
+      });
+      expect(methods.length).toBe(1);
+      const guards = calls(methods[0], builder).filter(
+        (call) => literal(call.arguments[0]) === "service-validation",
+      );
+      expect(guards.length).toBe(1);
+      const details = guards[0].arguments[1];
+      if (!details || !ts.isObjectLiteralExpression(details)) {
+        throw new Error(`Expected literal service-validation details in VectorMock.${name}`);
+      }
+      expect(adoptionFields(details).get("message")?.getText()).toBe(
+        '"Request body must be a JSON object"',
+      );
+    }
+  });
+  it.each(commonScopeRows)(
+    "%s %s delegates %s to its actual shared owner",
+    (file, handler, purpose) => {
+      const matches = calls(
+        named(`src/${file}.ts`, handler),
+        exported("src/response/errors.ts", "renderError"),
+      ).filter((call) => literal(call.arguments[1]) === purpose);
+      expect(matches.length).toBe(file === "chaos" ? 2 : 1);
+      for (const call of matches) expect(literal(call.arguments[0])).toBe("openai");
+    },
+  );
+
+  it("keeps every legacy error serializer caller delegated through its wrapper", () => {
+    expect(
+      calls(
+        named("src/helpers.ts", "serializeErrorResponse"),
+        exported("src/response/errors.ts", "renderError"),
+      ).length,
+    ).toBe(1);
+    const wrapper = exported("src/helpers.ts", "serializeErrorResponse");
+    const consumers = productionSources()
+      .filter((file) => calls(file, wrapper).length > 0)
+      .map(relativeSource)
+      .sort();
+    expect(consumers).toEqual([
+      "src/byteplus-video.ts",
+      "src/embeddings.ts",
+      "src/fal.ts",
+      "src/grok-video.ts",
+      "src/openrouter-video.ts",
+      "src/responses.ts",
+      "src/server.ts",
+      "src/veo-video.ts",
+      "src/video.ts",
+    ]);
+  });
+
+  it("binds every A9 service/OpenRouter wrapper and recorder failure to the common owner", () => {
+    const builder = exported("src/response/errors.ts", "buildOpenAIError");
+    for (const [file, handler] of [
+      ["files", "invalidRequest"],
+      ["batches", "invalid"],
+      ["fine-tuning", "invalid"],
+      ["vector-stores", "invalid"],
+      ["openrouter-chat", "serializeOpenRouterError"],
+    ]) {
+      expect(calls(named(`src/${file}.ts`, handler), builder).length).toBe(1);
+    }
+    const failures = calls(
+      named("src/recorder.ts", "proxyAndRecord"),
+      exported("src/response/errors.ts", "renderError"),
+    ).filter((call) => literal(call.arguments[1]) === "transport-failure");
+    expect(failures.length).toBe(4);
+    expect(
+      calls(
+        named("src/api-key-auth.ts", "writeApiKeyHttpRejection"),
+        exported("src/response/errors.ts", "renderError"),
+      ).length,
+    ).toBe(1);
+  });
+});
+
+describe("A8 native-error attribution", () => {
+  it.each(["anthropic-native-errors", "gemini-native-auth"])(
+    "%s names only an actual exported error owner",
+    (slug) => {
+      const mapping = SURFACE_REGISTRY[slug];
+      for (const name of mapping.builderFunctions) exported(mapping.builderFile, name);
+      expect(mapping.builderFile).toBe("src/response/errors.ts");
+      expect(mapping.builderFunctions).toEqual(["renderError"]);
+    },
+  );
+});
+
 const ownerRows = [
   ["openai-chat", "openai", ["resolve", "render"]],
   ["openrouter-chat", "openrouter", ["resolve", "render"]],
@@ -154,7 +902,7 @@ const frozenRegistryCoverage = {
     coverageNote:
       "Local auth and permissive missing-version behavior run always. Bounded vendor auth/version observations require AIMOCK_NATIVE_PROVIDER_DRIFT=1; missing-version also requires ANTHROPIC_API_KEY. This records intentional default-policy divergence; it does not enforce headers.",
     builderFile: "src/response/errors.ts",
-    builderFunctions: ["renderError", "writeUnauthorizedResponse"],
+    builderFunctions: ["renderError"],
     typesFile: null,
   },
   "gemini-native-auth": {
@@ -163,7 +911,7 @@ const frozenRegistryCoverage = {
     coverageNote:
       "Local mock HTTP auth401 runs always. Bounded unauthenticated Developer API observations require AIMOCK_NATIVE_PROVIDER_DRIFT=1. Google API-key rejection may differ from the mock's configured inbound auth; no 401 vendor equivalence is assumed.",
     builderFile: "src/response/errors.ts",
-    builderFunctions: ["renderError", "writeUnauthorizedResponse"],
+    builderFunctions: ["renderError"],
     typesFile: null,
   },
   gemini: {
