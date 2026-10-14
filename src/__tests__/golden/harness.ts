@@ -1044,6 +1044,11 @@ function expectedForCurrentJsonParser(
       return expected;
     const message = errorBody.error.message;
     if (
+      message === "Malformed JSON: Expected property name or '}' in JSON at position 1" ||
+      message === "Malformed JSON body: Expected property name or '}' in JSON at position 1"
+    )
+      continue;
+    if (
       message !==
         "Malformed JSON: Expected property name or '}' in JSON at position 1 (line 1 column 2)" &&
       message !==

@@ -1085,6 +1085,14 @@ describe("expectGolden", () => {
         writeFileSync(file, serializeGolden(expected));
         const options = { nativeJsonBodies: [[0, "body"]] } as const;
         expect(() => expectGolden(suite, "native-literal-matrix", actual, options)).not.toThrow();
+        expect(() =>
+          expectGolden(suite, "native-literal-matrix", actual, {
+            nativeJsonBodies: [
+              [0, "body"],
+              ["0", "body"],
+            ],
+          }),
+        ).not.toThrow();
         const changed = await fixtureLiteral(diagnosticLiteral.replace(" (line 1 column 2)", ""));
         expect(() =>
           expectGolden(suite, "native-literal-matrix", [actual[0], changed, actual[2]], options),
@@ -1180,6 +1188,9 @@ describe("expectGolden", () => {
             return () => expectGolden(suite, caseName, actual, { nativeJsonBodies: [["body"]] });
           };
           expect(compare(expected)).not.toThrow();
+          expect(() =>
+            expectGolden(suite, caseName, actual, { nativeJsonBodies: [["body"], ["body"]] }),
+          ).not.toThrow();
           for (const differentMessage of [
             message.replace("Expected property name or '}'", "Unexpected token 'x'"),
             message.replace("position 1", "position 2"),
