@@ -335,15 +335,16 @@ function registerNativeCatalogObservation(
   caseId: string,
   capture: () => Promise<{ expected: ObservedResponse; actual: ObservedResponse }>,
   allDiffs = false,
+  assertionTitle = id,
 ) {
   let captured: ReturnType<typeof capture> | undefined;
   const receive = () => (captured ??= capture());
   // Received evidence needs an eligible owner even when comparison is skipped.
-  it(`${id} received status/body (evidence only)`, async () => {
+  it(`${assertionTitle} received status/body (evidence only)`, async () => {
     const observation = await receive();
     emitLiveObservation({ surface, caseId, ...observation });
   });
-  it(`${id} comparison`, async (context) => {
+  it(`${assertionTitle} comparison`, async (context) => {
     const observation = await receive();
     if ([401, 403, 429].includes(observation.expected.status) || observation.expected.status >= 500)
       context.skip(
@@ -395,6 +396,7 @@ describe.skipIf(!nativeProviderDrift || !process.env.ANTHROPIC_API_KEY)(
           return { expected, actual };
         },
         true,
+        `Anthropic catalog vendor enforced missing-version ${path.startsWith("/v1/models/") ? "/v1/models/:model" : path}`,
       );
     }
     for (const { id, query } of anthropicCatalogCases.filter(

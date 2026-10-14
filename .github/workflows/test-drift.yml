@@ -1094,7 +1094,7 @@ jobs:
               ["anthropic-messages-missing-version-enforce", "anthropic-native-errors", "Anthropic vendor enforced missing-version /v1/messages comparison"],
               ["anthropic-count-missing-version-enforce", "anthropic-native-errors", "Anthropic vendor enforced missing-version /v1/messages/count_tokens comparison"],
               ["anthropic-models-missing-version-enforce", "anthropic-catalog", "Anthropic catalog vendor enforced missing-version /v1/models comparison"],
-              ["anthropic-model-detail-missing-version-enforce", "anthropic-catalog", "Anthropic catalog vendor enforced missing-version /v1/models/claude-sonnet-4-5 comparison"]
+              ["anthropic-model-detail-missing-version-enforce", "anthropic-catalog", "Anthropic catalog vendor enforced missing-version /v1/models/:model comparison"]
             ];
             for (const [id, surface, title] of enforced) {
               const row = receipt(`vendor:${id}`, surface);
