@@ -2135,6 +2135,234 @@ export interface CollectResult {
 export const NO_GA_DELTA_ID = "openai-realtime:no-ga-family";
 export const TRUNCATED_DELTA_ID = "openai-realtime:unknown-models-truncated";
 
+// The shared usage codecs remain the registry's primary owners. These two
+// recognized non-usage WS lanes instead need actionable transport remediation.
+const WS_NON_USAGE_BUILDERS: Record<
+  "openai-realtime" | "openai-responses-ws",
+  Pick<SurfaceMapping, "builderFile" | "builderFunctions">
+> = {
+  "openai-realtime": {
+    builderFile: "src/ws-realtime.ts",
+    builderFunctions: ["handleWebSocketRealtime", "realtimeItemsToMessages"],
+  },
+  "openai-responses-ws": {
+    builderFile: "src/ws-responses.ts",
+    builderFunctions: ["handleWebSocketResponses"],
+  },
+};
+
+type ParsedSurfaceBuilder = Pick<SurfaceMapping, "builderFile" | "builderFunctions"> & {
+  usageRoots: string[];
+  usageScalars?: string[];
+  finishRoots?: string[];
+  finishFunctions?: string[];
+};
+
+// Only the W7 usage-retargeted surfaces need an ordinary report's field owner.
+// Mixed reports keep one assembly anchor; real shared functions remain navigation
+// targets across source files, rather than implying every repair edits this file.
+const ORDINARY_PARSED_BUILDERS: Record<string, ParsedSurfaceBuilder> = {
+  "openai-chat": {
+    builderFile: "src/helpers.ts",
+    builderFunctions: [
+      "buildTextCompletion",
+      "buildToolCallCompletion",
+      "buildTextChunks",
+      "buildToolCallChunks",
+    ],
+    usageRoots: ["usage"],
+  },
+  "openrouter-chat": {
+    builderFile: "src/openrouter-chat.ts",
+    builderFunctions: [
+      "shapeOpenRouterCompletion",
+      "shapeOpenRouterChunks",
+      "serializeOpenRouterError",
+      "handleOpenRouterModels",
+    ],
+    usageRoots: ["usage"],
+  },
+  "openai-responses": {
+    builderFile: "src/responses.ts",
+    builderFunctions: [
+      "buildTextResponse",
+      "buildToolCallResponse",
+      "buildTextStreamEvents",
+      "buildToolCallStreamEvents",
+    ],
+    usageRoots: [
+      "usage",
+      "SSE:response.completed.response.usage",
+      "SSE:response.incomplete.response.usage",
+    ],
+    finishRoots: [
+      "status",
+      "SSE:response.completed.response.status",
+      "SSE:response.incomplete.response.status",
+    ],
+    finishFunctions: ["responsesStatus", "mapResponsesFinish"],
+  },
+  "openai-responses-ws": {
+    ...WS_NON_USAGE_BUILDERS["openai-responses-ws"],
+    usageRoots: [
+      "usage",
+      "SSE:response.completed.response.usage",
+      "SSE:response.incomplete.response.usage",
+    ],
+    finishRoots: [
+      "status",
+      "SSE:response.completed.response.status",
+      "SSE:response.incomplete.response.status",
+    ],
+    finishFunctions: ["responsesStatus", "mapResponsesFinish"],
+  },
+  anthropic: {
+    builderFile: "src/messages.ts",
+    builderFunctions: [
+      "buildClaudeTextResponse",
+      "buildClaudeToolCallResponse",
+      "buildClaudeTextStreamEvents",
+      "buildClaudeToolCallStreamEvents",
+    ],
+    usageRoots: ["usage", "SSE:message_start.message.usage", "SSE:message_delta.usage"],
+    finishRoots: ["stop_reason", "SSE:message_delta.delta.stop_reason"],
+    finishFunctions: ["claudeStopReason", "mapAnthropicFinish"],
+  },
+  "bedrock-invoke": {
+    builderFile: "src/bedrock.ts",
+    builderFunctions: [
+      "handleBedrock",
+      "handleBedrockStream",
+      "bedrockToCompletionRequest",
+      "buildBedrockStreamTextEvents",
+      "buildBedrockStreamToolCallEvents",
+      "buildBedrockStreamContentWithToolCallsEvents",
+    ],
+    usageRoots: ["usage", "SSE:message_start.message.usage", "SSE:message_delta.usage"],
+    finishRoots: ["stop_reason", "SSE:message_delta.delta.stop_reason"],
+    finishFunctions: ["bedrockStopReason", "mapAnthropicFinish"],
+  },
+  "bedrock-invoke-stream": {
+    builderFile: "src/bedrock.ts",
+    builderFunctions: [
+      "handleBedrockStream",
+      "buildBedrockStreamTextEvents",
+      "buildBedrockStreamToolCallEvents",
+      "buildBedrockStreamContentWithToolCallsEvents",
+    ],
+    usageRoots: ["usage", "SSE:message_start.message.usage", "SSE:message_delta.usage"],
+    finishRoots: ["stop_reason", "SSE:message_delta.delta.stop_reason"],
+    finishFunctions: ["bedrockStopReason", "mapAnthropicFinish"],
+  },
+  gemini: {
+    builderFile: "src/gemini.ts",
+    builderFunctions: [
+      "buildGeminiTextResponse",
+      "buildGeminiToolCallResponse",
+      "buildGeminiTextStreamChunks",
+      "buildGeminiToolCallStreamChunks",
+    ],
+    usageRoots: ["usageMetadata"],
+    finishRoots: ["candidates[].finishReason"],
+    finishFunctions: ["geminiFinishReason", "mapGeminiFinish"],
+  },
+  "vertex-ai": {
+    builderFile: "src/gemini.ts",
+    builderFunctions: [
+      "handleGemini",
+      "buildGeminiTextResponse",
+      "buildGeminiToolCallResponse",
+      "buildGeminiTextStreamChunks",
+      "buildGeminiToolCallStreamChunks",
+    ],
+    usageRoots: ["usageMetadata"],
+    finishRoots: ["candidates[].finishReason"],
+    finishFunctions: ["geminiFinishReason", "mapGeminiFinish"],
+  },
+  "gemini-interactions": {
+    builderFile: "src/gemini-interactions.ts",
+    builderFunctions: [
+      "buildInteractionsTextResponse",
+      "buildInteractionsToolCallResponse",
+      "buildInteractionsContentWithToolCallsResponse",
+      "buildInteractionsTextSSEEvents",
+      "buildInteractionsToolCallSSEEvents",
+      "buildInteractionsContentWithToolCallsSSEEvents",
+    ],
+    usageRoots: ["usage", "SSE:interaction.completed.interaction.usage"],
+  },
+  "cohere-chat": {
+    builderFile: "src/cohere.ts",
+    builderFunctions: ["handleCohere", "cohereToCompletionRequest"],
+    usageRoots: ["usage", "SSE:message-end.delta.usage"],
+    finishRoots: ["finish_reason", "SSE:message-end.delta.finish_reason"],
+    finishFunctions: ["cohereFinishReason", "mapCohereFinish"],
+  },
+  ollama: {
+    builderFile: "src/ollama.ts",
+    builderFunctions: ["handleOllama", "handleOllamaGenerate", "ollamaToCompletionRequest"],
+    usageRoots: [],
+    usageScalars: ["prompt_eval_count", "eval_count"],
+  },
+  "openai-realtime": {
+    ...WS_NON_USAGE_BUILDERS["openai-realtime"],
+    usageRoots: ["response.usage", "SSE:response.done.response.usage"],
+  },
+  "bedrock-converse": {
+    builderFile: "src/bedrock-converse.ts",
+    builderFunctions: ["handleConverse", "converseToCompletionRequest"],
+    usageRoots: ["usage", "SSE:metadata.usage"],
+    finishRoots: ["stopReason", "SSE:messageStop.stopReason"],
+    finishFunctions: ["converseStopReason", "mapAnthropicFinish"],
+  },
+  "bedrock-converse-stream": {
+    builderFile: "src/bedrock-converse.ts",
+    builderFunctions: ["handleConverseStream", "converseToCompletionRequest"],
+    usageRoots: ["usage", "SSE:metadata.usage"],
+    finishRoots: ["stopReason", "SSE:messageStop.stopReason"],
+    finishFunctions: ["converseStopReason", "mapAnthropicFinish"],
+  },
+};
+
+function isDriftRoot(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}.`) || path.startsWith(`${root}[`);
+}
+
+function ordinaryParsedBuilder(
+  surface: string | undefined,
+  mapping: ProviderMapping,
+  diffs: ParsedDiff[],
+): Pick<SurfaceMapping, "builderFile" | "builderFunctions"> {
+  if (!surface || !Object.hasOwn(ORDINARY_PARSED_BUILDERS, surface)) return mapping;
+  const endpoint = ORDINARY_PARSED_BUILDERS[surface];
+  // schema.ts emits `(root)[]` for a root array and `[]` for array members.
+  const paths = diffs.map((diff) =>
+    diff.path.replace(/^\(root\)\[\]\./, "").replace(/\[\d+\]/g, "[]"),
+  );
+  const isUsage = (path: string) =>
+    endpoint.usageRoots.some((root) => isDriftRoot(path, root)) ||
+    (endpoint.usageScalars?.includes(path) ?? false);
+  if (paths.length > 0 && paths.every(isUsage)) return mapping;
+
+  const isOpenAIError = (path: string) => surface === "openai-chat" && isDriftRoot(path, "error");
+  if (paths.length > 0 && paths.every(isOpenAIError)) {
+    return {
+      builderFile: "src/response/errors.ts",
+      builderFunctions: ["renderError", "buildOpenAIError"],
+    };
+  }
+
+  const functions = [...endpoint.builderFunctions];
+  if (paths.some(isUsage)) functions.push(...mapping.builderFunctions);
+  if (paths.some(isOpenAIError)) {
+    functions.push("serializeErrorResponse", "renderError", "buildOpenAIError");
+  }
+  if (paths.some((path) => endpoint.finishRoots?.some((root) => isDriftRoot(path, root)))) {
+    functions.push(...(endpoint.finishFunctions ?? []));
+  }
+  return { builderFile: endpoint.builderFile, builderFunctions: [...new Set(functions)] };
+}
+
 export function collectDriftEntries(results: VitestJsonResult): CollectResult {
   const entries: DriftEntry[] = [];
   const quarantine: QuarantineEntry[] = [];
@@ -2160,6 +2388,7 @@ export function collectDriftEntries(results: VitestJsonResult): CollectResult {
         const canary = parseKnownModelsCanary(fullMessage);
         if (canary !== null) {
           const mapping = SURFACE_REGISTRY["openai-realtime"];
+          const builder = WS_NON_USAGE_BUILDERS["openai-realtime"];
 
           // Build the critical diffs. F4: severity MUST be "critical" — the Fix
           // Drift workflow (.github/workflows/fix-drift.yml) gates remediation
@@ -2257,8 +2486,8 @@ export function collectDriftEntries(results: VitestJsonResult): CollectResult {
           entries.push({
             provider: "OpenAI Realtime",
             scenario: "known-models canary",
-            builderFile: mapping.builderFile,
-            builderFunctions: mapping.builderFunctions,
+            builderFile: builder.builderFile,
+            builderFunctions: builder.builderFunctions,
             typesFile: mapping.typesFile ?? null,
             sdkShapesFile: SDK_SHAPES_FILE,
             diffs,
@@ -2277,11 +2506,15 @@ export function collectDriftEntries(results: VitestJsonResult): CollectResult {
           // a rejected gemini-live handshake quarantine instead of routing to
           // src/ws-gemini-live.ts.
           const mapping = SURFACE_REGISTRY[wsFailure.surface];
+          const builder =
+            wsFailure.surface === "openai-realtime" || wsFailure.surface === "openai-responses-ws"
+              ? WS_NON_USAGE_BUILDERS[wsFailure.surface]
+              : mapping;
           entries.push({
             provider: mapping.provider,
             scenario: "WS handshake",
-            builderFile: mapping.builderFile,
-            builderFunctions: mapping.builderFunctions,
+            builderFile: builder.builderFile,
+            builderFunctions: builder.builderFunctions,
             typesFile: mapping.typesFile ?? null,
             sdkShapesFile: mapping.sdkShapesFile ?? SDK_SHAPES_FILE,
             diffs: [
@@ -2338,11 +2571,15 @@ export function collectDriftEntries(results: VitestJsonResult): CollectResult {
               continue;
             }
             const mapping = SURFACE_REGISTRY[surface];
+            const builder =
+              surface === "openai-realtime" || surface === "openai-responses-ws"
+                ? WS_NON_USAGE_BUILDERS[surface]
+                : mapping;
             entries.push({
               provider: mapping.provider,
               scenario: "WS session refused",
-              builderFile: mapping.builderFile,
-              builderFunctions: mapping.builderFunctions,
+              builderFile: builder.builderFile,
+              builderFunctions: builder.builderFunctions,
               typesFile: mapping.typesFile ?? null,
               sdkShapesFile: mapping.sdkShapesFile ?? SDK_SHAPES_FILE,
               diffs: [
@@ -2463,11 +2700,15 @@ export function collectDriftEntries(results: VitestJsonResult): CollectResult {
         mapping = legacyMapping;
       }
 
+      const ordinarySurface =
+        surfaceKey ??
+        Object.keys(SURFACE_REGISTRY).find((slug) => SURFACE_REGISTRY[slug] === mapping);
+      const builder = ordinaryParsedBuilder(ordinarySurface, mapping, parsed.diffs);
       entries.push({
         provider,
         scenario: extractScenario(parsed.context),
-        builderFile: mapping.builderFile,
-        builderFunctions: mapping.builderFunctions,
+        builderFile: builder.builderFile,
+        builderFunctions: builder.builderFunctions,
         typesFile: mapping.typesFile,
         sdkShapesFile: mapping.sdkShapesFile ?? SDK_SHAPES_FILE,
         diffs: parsed.diffs,

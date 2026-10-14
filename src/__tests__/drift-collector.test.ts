@@ -1964,6 +1964,21 @@ function makeAssertion(overrides: Partial<VitestAssertion> = {}): VitestAssertio
   };
 }
 
+// Preserve the real collector's input and output for the three standing captured
+// reporter cases. Evidence output never gates the assertions or changes inputs.
+function capturedRoutingCase(caseId: string, input: VitestJsonResult) {
+  const actual = collectDriftEntries(input);
+  const directory = process.env.AIMOCK_W7_ROUTING_EVIDENCE_DIR;
+  if (directory) {
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(
+      join(directory, `${caseId}.json`),
+      JSON.stringify({ caseId, input, actual }, null, 2),
+    );
+  }
+  return actual;
+}
+
 const SAMPLE_DIFF: ShapeDiff = {
   path: "choices[0].message.refusal",
   severity: "critical",
@@ -1981,6 +1996,39 @@ const SAMPLE_DIFF_WARNING: ShapeDiff = {
   real: "string",
   mock: "<absent>",
 };
+
+describe("W7 supplementary ordinary parsed routing", () => {
+  it.each([
+    [
+      "openai-realtime",
+      "src/ws-realtime.ts",
+      ["handleWebSocketRealtime", "realtimeItemsToMessages"],
+    ],
+    ["openai-responses-ws", "src/ws-responses.ts", ["handleWebSocketResponses"]],
+  ] as const)(
+    "%s keeps its non-usage endpoint metadata",
+    (surface, builderFile, builderFunctions) => {
+      // Reuse the existing generic parser fixture. This is a synthetic routing
+      // control, not a captured usage discrepancy or fresh provider observation.
+      const result = makeResult([
+        makeAssertion({
+          failureMessages: [
+            formatDriftReport("supplementary parsed routing control", [SAMPLE_DIFF], surface),
+          ],
+        }),
+      ]);
+      const actual = collectDriftEntries(result);
+      expect(actual.quarantine).toEqual([]);
+      expect(actual.timeouts).toEqual([]);
+      expect(actual.entries).toHaveLength(1);
+      expect(actual.entries[0].builderFile).toBe(builderFile);
+      expect(actual.entries[0].builderFunctions).toEqual(builderFunctions);
+      expect(actual.entries[0].provider).toBe(SURFACE_REGISTRY[surface].provider);
+      expect(actual.entries[0].diffs[0].severity).toBe("critical");
+      expect(exitCodeOf(result)).toBe(2);
+    },
+  );
+});
 
 // ---------------------------------------------------------------------------
 // REAL captured vitest --reporter=json failure-message fixtures.
@@ -2248,6 +2296,299 @@ describe("extractScenario", () => {
 // collectDriftEntries (HTTP drift path)
 // ---------------------------------------------------------------------------
 
+describe("R1 ordinary parsed owner routing", () => {
+  const openaiBuilders = [
+    "buildTextCompletion",
+    "buildToolCallCompletion",
+    "buildTextChunks",
+    "buildToolCallChunks",
+  ];
+  const anthropicBuilders = [
+    "buildClaudeTextResponse",
+    "buildClaudeToolCallResponse",
+    "buildClaudeTextStreamEvents",
+    "buildClaudeToolCallStreamEvents",
+  ];
+
+  // These generated controls exercise real collector routing, not vendor drift.
+  function supplementaryCase(caseId: string, surface: string, paths: string[], label?: string) {
+    const diffs = paths.map((path) => ({ ...SAMPLE_DIFF, path }));
+    const input = makeResult([
+      makeAssertion({
+        ancestorTitles: label ? [label] : [],
+        failureMessages: [
+          formatDriftReport(
+            label ?? "supplementary owner routing",
+            diffs,
+            label ? undefined : surface,
+          ),
+        ],
+      }),
+    ]);
+    const actual = capturedRoutingCase(caseId, input);
+    expect(actual.entries).toHaveLength(1);
+    expect(actual.entries[0].diffs).toEqual(diffs.map((diff) => ({ ...diff, id: diff.path })));
+    expect(actual.quarantine).toEqual([]);
+    expect(actual.timeouts).toEqual([]);
+    expect(exitCodeOf(input)).toBe(2);
+    return actual.entries[0];
+  }
+
+  it("routes the unchanged standing OpenAI refusal reporter capture to its endpoint builders", () => {
+    const input = makeResult([
+      makeAssertion({
+        status: "failed",
+        ancestorTitles: ["OpenAI Chat Completions drift"],
+        title: "non-streaming text matches real API",
+        failureMessages: [GENUINE_DRIFT_WITH_STACK],
+      }),
+    ]);
+    const actual = capturedRoutingCase("ordinary-openai-refusal", input);
+    expect(actual.entries).toHaveLength(1);
+    expect(actual.entries[0].provider).toBe("OpenAI Chat");
+    expect(actual.entries[0].scenario).toBe("non-streaming text");
+    expect(actual.entries[0].diffs).toEqual([
+      {
+        path: "choices[0].message.refusal",
+        severity: "critical",
+        issue: "LLMOCK DRIFT — mismatch detected",
+        expected: "null",
+        real: "null",
+        mock: "<absent>",
+        id: "choices[0].message.refusal",
+      },
+    ]);
+    expect(actual.quarantine).toEqual([]);
+    expect(actual.timeouts).toEqual([]);
+    expect(exitCodeOf(input)).toBe(2);
+    expect(actual.entries[0].builderFile).toBe("src/helpers.ts");
+    expect(actual.entries[0].builderFunctions).toEqual(openaiBuilders);
+  });
+
+  const surfaces = [
+    ["openai-chat", "usage.prompt_tokens", "openai", ["resolve", "render"], "src/helpers.ts"],
+    [
+      "openrouter-chat",
+      "usage.total_tokens",
+      "openrouter",
+      ["resolve", "render"],
+      "src/openrouter-chat.ts",
+    ],
+    ["openai-responses", "usage.input_tokens", "responses", ["render"], "src/responses.ts"],
+    ["openai-responses-ws", "usage.output_tokens", "responses", ["render"], "src/ws-responses.ts"],
+    ["anthropic", "usage.input_tokens", "anthropic", ["resolve", "render"], "src/messages.ts"],
+    ["bedrock-invoke", "usage.output_tokens", "anthropic", ["resolve", "render"], "src/bedrock.ts"],
+    [
+      "bedrock-invoke-stream",
+      "usage.output_tokens",
+      "anthropic",
+      ["resolve", "render"],
+      "src/bedrock.ts",
+    ],
+    ["gemini", "usageMetadata.promptTokenCount", "gemini", ["render"], "src/gemini.ts"],
+    ["vertex-ai", "usageMetadata.totalTokenCount", "gemini", ["render"], "src/gemini.ts"],
+    [
+      "gemini-interactions",
+      "usage.total_input_tokens",
+      "interactions",
+      ["render"],
+      "src/gemini-interactions.ts",
+    ],
+    ["cohere-chat", "usage.billed_units.input_tokens", "cohere", ["render"], "src/cohere.ts"],
+    ["ollama", "eval_count", "ollama", ["render"], "src/ollama.ts"],
+    [
+      "openai-realtime",
+      "response.usage.input_tokens",
+      "realtime",
+      ["render"],
+      "src/ws-realtime.ts",
+    ],
+    ["bedrock-converse", "usage.inputTokens", "converse", ["render"], "src/bedrock-converse.ts"],
+    [
+      "bedrock-converse-stream",
+      "usage.outputTokens",
+      "converse",
+      ["render"],
+      "src/bedrock-converse.ts",
+    ],
+  ] as const;
+
+  it.each(surfaces)(
+    "%s usage-only fields retain their codec",
+    (surface, path, codec, functions) => {
+      const entry = supplementaryCase(`${surface}-usage`, surface, [path]);
+      expect(entry.builderFile).toBe(`src/response/usage/codecs/${codec}.ts`);
+      expect(entry.builderFunctions).toEqual(functions);
+    },
+  );
+
+  it.each(surfaces)(
+    "%s content fields retain an endpoint anchor",
+    (surface, _path, _codec, _functions, endpoint) => {
+      const entry = supplementaryCase(`${surface}-content`, surface, ["content[].text"]);
+      expect(entry.builderFile).toBe(endpoint);
+      expect(entry.builderFunctions).not.toContain("render");
+    },
+  );
+
+  it.each([
+    ["openai-chat", "(root)[].usage.prompt_tokens", "openai", ["resolve", "render"]],
+    [
+      "openai-responses",
+      "SSE:response.completed.response.usage.output_tokens",
+      "responses",
+      ["render"],
+    ],
+    [
+      "openai-responses-ws",
+      "SSE:response.incomplete.response.usage.input_tokens",
+      "responses",
+      ["render"],
+    ],
+    [
+      "anthropic",
+      "SSE:message_start.message.usage.input_tokens",
+      "anthropic",
+      ["resolve", "render"],
+    ],
+    [
+      "bedrock-invoke-stream",
+      "SSE:message_delta.usage.output_tokens",
+      "anthropic",
+      ["resolve", "render"],
+    ],
+    [
+      "gemini-interactions",
+      "SSE:interaction.completed.interaction.usage.total_output_tokens",
+      "interactions",
+      ["render"],
+    ],
+    ["cohere-chat", "SSE:message-end.delta.usage.tokens.input_tokens", "cohere", ["render"]],
+    ["openai-realtime", "SSE:response.done.response.usage.output_tokens", "realtime", ["render"]],
+    ["bedrock-converse-stream", "SSE:metadata.usage.inputTokens", "converse", ["render"]],
+  ] as const)("%s recognizes its native usage path %s", (surface, path, codec, functions) => {
+    const entry = supplementaryCase(`${surface}-native-usage`, surface, [path]);
+    expect(entry.builderFile).toBe(`src/response/usage/codecs/${codec}.ts`);
+    expect(entry.builderFunctions).toEqual(functions);
+  });
+
+  it.each(["usage_extra", "choices[0].message.usage", "SSE:message_delta", "", "unknown.path"])(
+    "keeps unknown or non-usage path %s at the endpoint",
+    (path) => {
+      const entry = supplementaryCase(`boundary-${encodeURIComponent(path)}`, "openai-chat", [
+        path,
+      ]);
+      expect(entry.builderFile).toBe("src/helpers.ts");
+      expect(entry.builderFunctions).toEqual(openaiBuilders);
+    },
+  );
+
+  it("routes only OpenAI error-envelope fields to the shared error owner", () => {
+    const entry = supplementaryCase("openai-error", "openai-chat", ["error.message", "error.type"]);
+    expect(entry.builderFile).toBe("src/response/errors.ts");
+    expect(entry.builderFunctions).toEqual(["renderError", "buildOpenAIError"]);
+  });
+
+  it("keeps a bare OpenAI message field at its assembly anchor", () => {
+    const entry = supplementaryCase("openai-bare-message", "openai-chat", ["message"]);
+    expect(entry.builderFile).toBe("src/helpers.ts");
+    expect(entry.builderFunctions).toEqual(openaiBuilders);
+  });
+
+  it("retains caller defaults and the shared mapper for Anthropic finish fields", () => {
+    const entry = supplementaryCase("anthropic-finish", "anthropic", ["stop_reason"]);
+    expect(entry.builderFile).toBe("src/messages.ts");
+    expect(entry.builderFunctions).toEqual([
+      ...anthropicBuilders,
+      "claudeStopReason",
+      "mapAnthropicFinish",
+    ]);
+  });
+
+  it("keeps mixed content and usage together with both actual owners", () => {
+    const entry = supplementaryCase("openai-mixed-content-usage", "openai-chat", [
+      "choices[].message.content",
+      "usage.total_tokens",
+    ]);
+    expect(entry.builderFile).toBe("src/helpers.ts");
+    expect(entry.builderFunctions).toEqual([...openaiBuilders, "resolve", "render"]);
+  });
+
+  it("keeps mixed error and usage together with real shared functions", () => {
+    const entry = supplementaryCase("openai-mixed-error-usage", "openai-chat", [
+      "error.message",
+      "usage.total_tokens",
+    ]);
+    expect(entry.builderFile).toBe("src/helpers.ts");
+    expect(entry.builderFunctions).toEqual([
+      ...openaiBuilders,
+      "resolve",
+      "render",
+      "serializeErrorResponse",
+      "renderError",
+      "buildOpenAIError",
+    ]);
+  });
+
+  it("keeps mixed finish and usage together without displacing caller defaults", () => {
+    const entry = supplementaryCase("anthropic-mixed-finish-usage", "anthropic", [
+      "SSE:message_delta.delta.stop_reason",
+      "SSE:message_delta.usage.output_tokens",
+    ]);
+    expect(entry.builderFile).toBe("src/messages.ts");
+    expect(entry.builderFunctions).toEqual([
+      ...anthropicBuilders,
+      "resolve",
+      "render",
+      "claudeStopReason",
+      "mapAnthropicFinish",
+    ]);
+  });
+
+  it("leaves Ollama duration fields with the endpoint", () => {
+    const entry = supplementaryCase("ollama-duration", "ollama", ["prompt_eval_duration"]);
+    expect(entry.builderFile).toBe("src/ollama.ts");
+    expect(entry.builderFunctions).toEqual([
+      "handleOllama",
+      "handleOllamaGenerate",
+      "ollamaToCompletionRequest",
+    ]);
+  });
+
+  it.each(["Anthropic", "Anthropic Claude"])(
+    "preserves legacy label %s with codec-only usage",
+    (label) => {
+      const entry = supplementaryCase(
+        `legacy-${label.replace(/ /g, "-")}`,
+        "anthropic",
+        ["usage.input_tokens"],
+        label,
+      );
+      expect(entry.provider).toBe(label);
+      expect(entry.builderFile).toBe("src/response/usage/codecs/anthropic.ts");
+      expect(entry.builderFunctions).toEqual(["resolve", "render"]);
+    },
+  );
+
+  it("preserves a legacy OpenAI label for non-usage fields", () => {
+    const entry = supplementaryCase(
+      "legacy-openai-content",
+      "openai-chat",
+      ["choices[].message.content"],
+      "OpenAI Chat",
+    );
+    expect(entry.provider).toBe("OpenAI Chat");
+    expect(entry.builderFile).toBe("src/helpers.ts");
+    expect(entry.builderFunctions).toEqual(openaiBuilders);
+  });
+
+  it("preserves an unaffected surface mapping", () => {
+    const entry = supplementaryCase("unaffected-images", "images", ["usage.total_tokens"]);
+    expect(entry.builderFile).toBe(SURFACE_REGISTRY["images"].builderFile);
+    expect(entry.builderFunctions).toEqual(SURFACE_REGISTRY["images"].builderFunctions);
+  });
+});
+
 describe("collectDriftEntries", () => {
   it("returns empty entries+quarantine when no failed tests", () => {
     const result = makeResult([
@@ -2337,12 +2678,14 @@ describe("collectDriftEntries", () => {
       }),
     ]);
 
-    // GREEN: one attributed critical entry, no quarantine, exit 2.
-    expect(quarantineOf(result)).toEqual([]);
-    const entries = entriesOf(result);
+    const actual = capturedRoutingCase("realtime-session-type", result);
+    // Payload/disposition controls precede the independently literal owner
+    // assertion, so a routing RED cannot conceal a preservation failure.
+    expect(actual.quarantine).toEqual([]);
+    expect(actual.timeouts).toEqual([]);
+    const entries = actual.entries;
     expect(entries).toHaveLength(1);
     expect(entries[0].provider).toBe("OpenAI Realtime");
-    expect(entries[0].builderFile).toBe("src/ws-realtime.ts");
     expect(entries[0].diffs).toHaveLength(1);
     expect(entries[0].diffs[0].severity).toBe("critical");
     // The surfaced error payload (type/code/message) is carried into the entry.
@@ -2350,6 +2693,10 @@ describe("collectDriftEntries", () => {
     expect(entries[0].diffs[0].issue).toContain("missing_required_parameter");
     expect(entries[0].diffs[0].issue).toContain("session.type");
     expect(exitCodeOf(result)).toBe(2);
+    expect({ file: entries[0].builderFile, functions: entries[0].builderFunctions }).toEqual({
+      file: "src/ws-realtime.ts",
+      functions: ["handleWebSocketRealtime", "realtimeItemsToMessages"],
+    });
   });
 
   it("does NOT recognize a bare WS timeout (zero messages, no error body) as handshake drift → live-timeout lane (exit 6), NOT drift and NOT quarantine", () => {
@@ -2474,13 +2821,15 @@ describe("collectDriftEntries", () => {
       }),
     ]);
 
-    const entries = entriesOf(result);
+    const actual = capturedRoutingCase("realtime-unknown-models", result);
+    expect(actual.quarantine).toEqual([]);
+    expect(actual.timeouts).toEqual([]);
+    const entries = actual.entries;
     expect(entries).toHaveLength(1);
 
     const entry = entries[0];
     expect(entry.provider).toBe("OpenAI Realtime");
     expect(entry.scenario).toBe("known-models canary");
-    expect(entry.builderFile).toBe("src/ws-realtime.ts");
 
     // FULL list recovered from the marker (NOT truncated to just the first id).
     const reals = entry.diffs.map((d) => d.real);
@@ -2506,6 +2855,17 @@ describe("collectDriftEntries", () => {
       0,
     );
     expect(criticalCount).toBe(4);
+    expect(exitCodeOf(result)).toBe(2);
+    for (const diff of entry.diffs) {
+      expect(diff.path).toBe("knownVoiceModelFamilies");
+      expect(diff.issue).toBe(
+        "Unknown realtime model detected — add to knownVoiceModelFamilies in src/__tests__/drift/voice-models.ts",
+      );
+    }
+    expect({ file: entry.builderFile, functions: entry.builderFunctions }).toEqual({
+      file: "src/ws-realtime.ts",
+      functions: ["handleWebSocketRealtime", "realtimeItemsToMessages"],
+    });
   });
 
   it("does NOT misattribute a non-canary toEqual([]) failure from another provider as OpenAI-Realtime drift → quarantine (exit 5)", () => {
@@ -2591,11 +2951,13 @@ describe("collectDriftEntries", () => {
       }),
     ]);
 
-    const entries = entriesOf(result);
+    const actual = capturedRoutingCase("realtime-no-ga", result);
+    expect(actual.quarantine).toEqual([]);
+    expect(actual.timeouts).toEqual([]);
+    const entries = actual.entries;
     expect(entries).toHaveLength(1);
     const entry = entries[0];
     expect(entry.provider).toBe("OpenAI Realtime");
-    expect(entry.builderFile).toBe("src/ws-realtime.ts");
     expect(entry.diffs.length).toBeGreaterThan(0);
     expect(entry.diffs.every((d) => d.severity === "critical")).toBe(true);
 
@@ -2604,6 +2966,20 @@ describe("collectDriftEntries", () => {
       0,
     );
     expect(criticalCount).toBeGreaterThan(0);
+    expect(exitCodeOf(result)).toBe(2);
+    expect(entry.diffs).toHaveLength(1);
+    expect(entry.diffs[0]).toMatchObject({
+      id: NO_GA_DELTA_ID,
+      path: "gaRealtimeModels",
+      real: "observed realtime models: gpt-foo, gpt-bar",
+      mock: "<no mock leg — real-API-only canary>",
+      issue:
+        "GA realtime family unavailable — no known GA model in the OpenAI realtime list. OpenAI may have renamed/removed the GA family, or the realtime credential cannot see it. Update gaRealtimeModels in src/__tests__/drift/voice-models.ts.",
+    });
+    expect({ file: entry.builderFile, functions: entry.builderFunctions }).toEqual({
+      file: "src/ws-realtime.ts",
+      functions: ["handleWebSocketRealtime", "realtimeItemsToMessages"],
+    });
   });
 
   it("preserves the unknown-model list in the NO_GA entry (no info loss when both fire)", () => {
@@ -3423,8 +3799,15 @@ describe("a WS failure with no probe frame is attributed by the failing test's n
       const entries = entriesOf(result);
       expect(entries).toHaveLength(1);
       expect(entries[0].provider).toBe(provider);
-      expect(entries[0].builderFile).toBe(builder);
       expect(exitCodeOf(result)).toBe(2);
+      expect(entries[0].builderFile).toBe(builder);
+      expect(entries[0].builderFunctions).toEqual(
+        provider === "OpenAI Realtime"
+          ? ["handleWebSocketRealtime", "realtimeItemsToMessages"]
+          : provider === "OpenAI Responses WS"
+            ? ["handleWebSocketResponses"]
+            : ["handleWebSocketGeminiLive"],
+      );
     },
   );
 
@@ -3439,9 +3822,16 @@ describe("a WS failure with no probe frame is attributed by the failing test's n
       const entries = entriesOf(result);
       expect(entries).toHaveLength(1);
       expect(entries[0].provider).toBe(provider);
-      expect(entries[0].builderFile).toBe(builder);
       expect(entries[0].scenario).toBe("WS handshake");
       expect(exitCodeOf(result)).toBe(2);
+      expect(entries[0].builderFile).toBe(builder);
+      expect(entries[0].builderFunctions).toEqual(
+        provider === "OpenAI Realtime"
+          ? ["handleWebSocketRealtime", "realtimeItemsToMessages"]
+          : provider === "OpenAI Responses WS"
+            ? ["handleWebSocketResponses"]
+            : ["handleWebSocketGeminiLive"],
+      );
     },
   );
 
@@ -3780,10 +4170,17 @@ describe("zero-observation live timeouts are reported AS timeouts (exit 6)", () 
       const entries = entriesOf(result);
       expect(entries).toHaveLength(1);
       expect(entries[0].provider).toBe(wantProvider);
-      expect(entries[0].builderFile).toBe(wantBuilderFile);
       expect(entries[0].diffs[0].severity).toBe("critical");
       expect(entries[0].diffs[0].id).toBe("ws-handshake:bad_setup");
       expect(exitCodeOf(result)).toBe(2);
+      expect(entries[0].builderFile).toBe(wantBuilderFile);
+      expect(entries[0].builderFunctions).toEqual(
+        wantProvider === "OpenAI Realtime"
+          ? ["handleWebSocketRealtime", "realtimeItemsToMessages"]
+          : wantProvider === "OpenAI Responses WS"
+            ? ["handleWebSocketResponses"]
+            : ["handleWebSocketGeminiLive"],
+      );
     },
   );
 
