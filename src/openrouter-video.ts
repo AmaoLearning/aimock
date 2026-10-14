@@ -854,9 +854,10 @@ async function proxyOpenRouterVideoRecordContent(args: {
     writeErrorResponse(
       res,
       502,
-      JSON.stringify({
-        error: { message: `Proxy to upstream failed: ${msg}`, type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: `Proxy to upstream failed: ${msg}`,
+        type: "proxy_error",
+      }).body,
     );
   };
 
@@ -1739,9 +1740,10 @@ async function proxyOpenRouterVideoSubmit(args: {
     writeErrorResponse(
       res,
       502,
-      JSON.stringify({
-        error: { message: `Proxy to upstream failed: ${msg}`, type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: `Proxy to upstream failed: ${msg}`,
+        type: "proxy_error",
+      }).body,
     );
     return "handled";
   };
@@ -2006,9 +2008,10 @@ async function proxyOpenRouterVideoRecordPoll(args: {
     writeErrorResponse(
       res,
       502,
-      JSON.stringify({
-        error: { message: `Proxy to upstream failed: ${msg}`, type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: `Proxy to upstream failed: ${msg}`,
+        type: "proxy_error",
+      }).body,
     );
   };
 

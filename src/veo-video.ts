@@ -19,6 +19,7 @@ import {
   strictNoMatchLogLine,
 } from "./helpers.js";
 import { resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
+import { renderError } from "./response/errors.js";
 import { matchFixtureDiagnostic } from "./router.js";
 import { writeErrorResponse } from "./sse-writer.js";
 import type { Journal } from "./journal.js";
@@ -660,9 +661,10 @@ async function proxyVeoVideoSubmit(args: {
     writeErrorResponse(
       res,
       502,
-      JSON.stringify({
-        error: { message: `Proxy to upstream failed: ${msg}`, type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: `Proxy to upstream failed: ${msg}`,
+        type: "proxy_error",
+      }).body,
     );
     return "handled";
   };
@@ -867,9 +869,10 @@ async function proxyVeoVideoRecordPoll(args: {
     writeErrorResponse(
       res,
       502,
-      JSON.stringify({
-        error: { message: `Proxy to upstream failed: ${msg}`, type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: `Proxy to upstream failed: ${msg}`,
+        type: "proxy_error",
+      }).body,
     );
   };
 
