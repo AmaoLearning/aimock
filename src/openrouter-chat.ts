@@ -16,6 +16,7 @@ import type { Journal } from "./journal.js";
 import { flattenHeaders } from "./helpers.js";
 import { collect } from "./response/catalog/collect.js";
 import { renderOpenRouterChatModels } from "./response/catalog/render.js";
+import { buildOpenAIError } from "./response/errors.js";
 
 /**
  * OpenRouter chat/LLM router shaping. aimock detects an OpenRouter request by
@@ -212,13 +213,7 @@ export function serializeOpenRouterError(
   message: string,
   metadata?: Record<string, unknown>,
 ): string {
-  return JSON.stringify({
-    error: {
-      code: status,
-      message,
-      ...(metadata !== undefined && { metadata }),
-    },
-  });
+  return JSON.stringify(buildOpenAIError("openrouter-error", { code: status, message, metadata }));
 }
 
 // ─── Discovery endpoints ─────────────────────────────────────────────────────

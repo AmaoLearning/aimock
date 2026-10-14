@@ -31,6 +31,7 @@ import { isAuthenticatedRequest, isRecognizedApiKeyHeader } from "./api-key-auth
 import { getTestId, slugifyTestId, slugifyContext, hasMintedRequestId } from "./helpers.js";
 import { DEFAULT_TEST_ID } from "./constants.js";
 import { captureUsage } from "./response/usage/recording.js";
+import { renderError } from "./response/errors.js";
 
 /** True when an SSE frame completes an OpenAI stream. */
 function isTerminalSSEFrame(frame: string): boolean {
@@ -556,9 +557,10 @@ export async function proxyAndRecord(
     writeErrorResponse(
       res,
       502,
-      JSON.stringify({
-        error: { message: `Invalid upstream URL: ${upstreamUrl}`, type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: `Invalid upstream URL: ${upstreamUrl}`,
+        type: "proxy_error",
+      }).body,
     );
     return "relayed";
   }
@@ -576,9 +578,10 @@ export async function proxyAndRecord(
     writeErrorResponse(
       res,
       502,
-      JSON.stringify({
-        error: { message: "No configured provider credential", type: "proxy_error" },
-      }),
+      renderError("openai", "transport-failure", {
+        message: "No configured provider credential",
+        type: "proxy_error",
+      }).body,
     );
     return "relayed";
   }
@@ -635,9 +638,10 @@ export async function proxyAndRecord(
     if (!res.headersSent) {
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: { message: `Proxy to upstream failed: ${msg}`, type: "proxy_error" },
-        }),
+        renderError("openai", "transport-failure", {
+          message: `Proxy to upstream failed: ${msg}`,
+          type: "proxy_error",
+        }).body,
       );
     } else {
       // Streaming headers (200) are already on the wire, so we cannot change the
@@ -677,12 +681,10 @@ export async function proxyAndRecord(
       );
       res.writeHead(502, { "Content-Type": "application/json" });
       res.end(
-        JSON.stringify({
-          error: {
-            message: `Upstream response exceeds ${ceilingMiB}MiB proxy ceiling`,
-            type: "proxy_error",
-          },
-        }),
+        renderError("openai", "transport-failure", {
+          message: `Upstream response exceeds ${ceilingMiB}MiB proxy ceiling`,
+          type: "proxy_error",
+        }).body,
       );
       return "relayed";
     }

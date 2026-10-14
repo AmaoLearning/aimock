@@ -381,3 +381,116 @@ describe("A9 owner binding", () => {
     ).toBe(true);
   });
 });
+
+function consumerSource(relative: string) {
+  return ts.createSourceFile(
+    relative,
+    readFileSync(join(sourceRoot, relative), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+}
+
+function ownerImport(source: ts.SourceFile, name: string) {
+  for (const statement of source.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== "./response/errors.js"
+    )
+      continue;
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    const imported = bindings.elements.find(
+      (element) => (element.propertyName ?? element.name).text === name,
+    );
+    if (imported) return imported.name.text;
+  }
+  return undefined;
+}
+
+function expectOwnerCall(
+  source: ts.SourceFile,
+  expression: ts.Expression | undefined,
+  name: string,
+  purpose: string,
+) {
+  expect(expression && ts.isCallExpression(expression)).toBe(true);
+  if (!expression || !ts.isCallExpression(expression)) throw new Error("Expected owner call");
+  const bound = ownerImport(source, name);
+  expect(bound).toBeDefined();
+  expect(ts.isIdentifier(expression.expression) && expression.expression.text).toBe(bound);
+  const purposeArgument = expression.arguments[name === "renderError" ? 1 : 0];
+  expect(purposeArgument && ts.isStringLiteral(purposeArgument) && purposeArgument.text).toBe(
+    purpose,
+  );
+  return expression;
+}
+
+function helperReturn(source: ts.SourceFile, name: string) {
+  const helper = source.statements
+    .filter(ts.isFunctionDeclaration)
+    .find((node) => node.name?.text === name);
+  if (!helper?.body) throw new Error(`Missing consumer helper ${name}`);
+  return helper.body.statements.find(ts.isReturnStatement)?.expression;
+}
+
+describe("A9 consumer ownership", () => {
+  it.each([
+    ["files.ts", "invalidRequest"],
+    ["batches.ts", "invalid"],
+    ["fine-tuning.ts", "invalid"],
+    ["vector-stores.ts", "invalid"],
+  ])("delegates %s %s directly to the typed service owner", (relative, helper) => {
+    const source = consumerSource(relative);
+    expectOwnerCall(source, helperReturn(source, helper), "buildOpenAIError", "service-validation");
+  });
+
+  it("delegates the OpenRouter serializer directly to the typed numeric/metadata owner", () => {
+    const source = consumerSource("openrouter-chat.ts");
+    const serialized = helperReturn(source, "serializeOpenRouterError");
+    expect(serialized && ts.isCallExpression(serialized)).toBe(true);
+    if (!serialized || !ts.isCallExpression(serialized))
+      throw new Error("Missing OpenRouter serializer call");
+    expect(serialized.expression.getText(source)).toBe("JSON.stringify");
+    expectOwnerCall(source, serialized.arguments[0], "buildOpenAIError", "openrouter-error");
+  });
+
+  it.each([
+    "Invalid upstream URL: ",
+    "No configured provider credential",
+    "Proxy to upstream failed: ",
+    "Upstream response exceeds ",
+  ])("delegates only the recorder-local %s body to transport rendering", (prefix) => {
+    const source = consumerSource("recorder.ts");
+    const proxy = source.statements
+      .filter(ts.isFunctionDeclaration)
+      .find((node) => node.name?.text === "proxyAndRecord");
+    if (!proxy?.body) throw new Error("Missing proxyAndRecord body");
+    const calls: ts.CallExpression[] = [];
+    const walk = (node: ts.Node) => {
+      if (ts.isCallExpression(node)) {
+        const details = node.arguments[2];
+        if (details && ts.isObjectLiteralExpression(details)) {
+          const message = details.properties
+            .filter(ts.isPropertyAssignment)
+            .find((property) => property.name.getText(source) === "message")?.initializer;
+          if (
+            message &&
+            ((ts.isTemplateExpression(message) && message.head.text.startsWith(prefix)) ||
+              (ts.isStringLiteral(message) && message.text.startsWith(prefix)))
+          )
+            calls.push(node);
+        }
+      }
+      ts.forEachChild(node, walk);
+    };
+    walk(proxy.body);
+    expect(calls).toHaveLength(1);
+    const call = expectOwnerCall(source, calls[0], "renderError", "transport-failure");
+    expect(call.arguments[0]?.getText(source)).toBe('"openai"');
+    expect(call.parent && ts.isPropertyAccessExpression(call.parent) && call.parent.name.text).toBe(
+      "body",
+    );
+  });
+});
