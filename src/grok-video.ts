@@ -1,3 +1,4 @@
+import { renderError } from "./response/errors.js";
 import type * as http from "node:http";
 import crypto from "node:crypto";
 import type {
@@ -506,9 +507,10 @@ export async function handleGrokVideoCreate(
     writeErrorResponse(
       res,
       500,
-      JSON.stringify({
-        error: { message: "Fixture response is not a video type", type: "server_error" },
-      }),
+      renderError("openai", "unknown-response", {
+        message: "Fixture response is not a video type",
+        type: "server_error",
+      }).body,
     );
     return;
   }

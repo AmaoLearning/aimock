@@ -460,7 +460,10 @@ export async function handleVideoStatus(
     writeErrorResponse(
       res,
       404,
-      JSON.stringify({ error: { message: `Video ${videoId} not found`, type: "not_found" } }),
+      renderError("openai", "route-failure", {
+        message: `Video ${videoId} not found`,
+        type: "not_found",
+      }).body,
     );
     return;
   }
