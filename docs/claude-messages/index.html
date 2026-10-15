@@ -122,7 +122,10 @@
         <p>
           Invalid limits and lifecycle values return 400 <code>invalid_request_error</code>. Unknown
           cursors return an empty page, with null first and last IDs. These error details and cursor
-          results are local contracts. Authenticated upstream catalog errors were not measured.
+          results are local contracts. Authenticated upstream probes with unknown
+          <code>after_id</code> and <code>before_id</code> returned 400
+          <code>invalid_request_error</code>. aimock intentionally retains empty pages for those
+          cursors.
         </p>
         <p>
           Each model has <code>type: "model"</code>, its ID as <code>display_name</code>,

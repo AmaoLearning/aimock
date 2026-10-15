@@ -1117,11 +1117,85 @@ jobs:
             if (!isDeepStrictEqual(intentional[0].diffs.map(normalizeDiff).sort(), expectedDiffs)) throw new Error("Intentional entry does not match complete received diffs");
             const defaultAssertions = drift.assertions.map(object).filter((value) => value.title === "Anthropic vendor missing-version (intentional default divergence) comparison");
             if (defaultAssertions.length !== 1 || defaultAssertions[0].status !== "failed") throw new Error("Intentional comparison invocation mismatch");
-            const hasOtherCritical = entries.filter((entry) => entry !== intentional[0]).some((entry) => Array.isArray(entry.diffs) && entry.diffs.some((diff) => object(diff).severity === "critical"));
+            const validatedEntries = [intentional[0]];
+            const policyAssertions = drift.assertions.map(object);
+            const assertion = (title: string, status: "passed" | "failed", ancestor: string) => {
+              const matches = policyAssertions.filter((value) => value.title === title &&
+                isDeepStrictEqual(value.ancestors, [ancestor]));
+              if (matches.length !== 1 || matches[0].status !== status ||
+                  object(matches[0].consoleContext).availability !== "available")
+                throw new Error(`Unbound retained-policy assertion: ${title}`);
+            };
+            const exactKeys = (value: Record<string, unknown>, keys: string[]) =>
+              isDeepStrictEqual(Object.keys(value).sort(), [...keys].sort());
+            const anthropicError = (response: ObservedResponse, status: number, type: string, message: string) => {
+              const body = object(response.body);
+              const error = object(body.error);
+              if (response.status !== status || body.type !== "error" || error.type !== type ||
+                  error.message !== message || typeof body.request_id !== "string" ||
+                  !exactKeys(body, ["type", "error", "request_id"]) || !exactKeys(error, ["type", "message"]))
+                throw new Error("Unexpected retained-policy Anthropic response");
+            };
+            const localContract = (id: string, surface: string, title: string, ancestor: string, expected: ObservedResponse) => {
+              const local = receipt(id, surface);
+              if (!isDeepStrictEqual(local.expected, expected) || !isDeepStrictEqual(local.actual, expected))
+                throw new Error(`Retained local contract changed: ${id}`);
+              assertion(title, "passed", ancestor);
+            };
+            const retain = (provider: string, scenario: string, builderFile: string, builderFunctions: string[],
+                pair: { expected: ObservedResponse; actual: ObservedResponse }, local: ObservedResponse) => {
+              const matches = entries.filter((entry) => entry.provider === provider && entry.scenario === scenario);
+              if (matches.length !== 1 || matches[0].builderFile !== builderFile ||
+                  !isDeepStrictEqual(matches[0].builderFunctions, builderFunctions) || !Array.isArray(matches[0].diffs) ||
+                  !isDeepStrictEqual(pair.actual, local)) throw new Error(`Unexpected retained-policy entry: ${scenario}`);
+              const receivedDiffs = nativeResponseDiffs(pair.expected, pair.actual).map(normalizeDiff).sort();
+              if (receivedDiffs.length === 0 || !isDeepStrictEqual(matches[0].diffs.map(normalizeDiff).sort(), receivedDiffs))
+                throw new Error(`Retained-policy entry differs from complete received diffs: ${scenario}`);
+              validatedEntries.push(matches[0]);
+            };
+            // Approved exact inbound auth contracts intentionally differ from vendor gateways.
+            const auth = receipt("vendor:anthropic-auth", "anthropic-native-errors");
+            anthropicError(auth.expected, 401, "authentication_error", "x-api-key header is required");
+            const anthropicLocal = { status: 401, body: { type: "error", error: { type: "authentication_error", message: "Invalid API key" } } };
+            assertion("Anthropic vendor auth received status/body (evidence only)", "passed", "native provider Anthropic vendor errors");
+            assertion("Anthropic vendor auth comparison", "failed", "native provider Anthropic vendor errors");
+            localContract("local:anthropic-count-auth", "anthropic-native-errors", "local auth /v1/messages/count_tokens",
+              "native provider Anthropic auth and missing-version local contracts", anthropicLocal);
+            retain("Anthropic native authentication and version", "Anthropic vendor auth", "src/response/errors.ts", ["renderError"], auth, anthropicLocal);
+
+            const gemini = receipt("vendor:gemini-auth", "gemini-native-auth");
+            const geminiBody = object(gemini.expected.body);
+            const geminiError = object(geminiBody.error);
+            if (gemini.expected.status !== 403 || geminiError.code !== 403 || geminiError.status !== "PERMISSION_DENIED" ||
+                geminiError.message !== "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other form of API consumer identity to call this API." ||
+                !exactKeys(geminiBody, ["error"]) || !exactKeys(geminiError, ["code", "message", "status"]))
+              throw new Error("Unexpected retained-policy Gemini gateway response");
+            const geminiLocal = { status: 401, body: { error: { code: 401, message: "Invalid API key", status: "UNAUTHENTICATED" } } };
+            assertion("vendor unauthenticated received status/body (evidence only)", "passed", "native provider Gemini vendor auth observation");
+            assertion("vendor unauthenticated comparison", "failed", "native provider Gemini vendor auth observation");
+            localContract("local:gemini-count-auth", "gemini-native-auth", "local auth /v1beta/models/gemini-test:countTokens",
+              "native provider Gemini auth local contracts", geminiLocal);
+            retain("Gemini native authentication", "inbound policy divergence", "src/response/errors.ts", ["renderError"], gemini, geminiLocal);
+
+            // The documented local catalog retains empty pages for both unknown cursor directions.
+            const emptyPage = { status: 200, body: { data: [], has_more: false, first_id: null, last_id: null } };
+            for (const direction of ["after", "before"]) {
+              const id = `anthropic-${direction}-unknown`;
+              const cursor = receipt(`vendor:${id}`, "anthropic-catalog");
+              anthropicError(cursor.expected, 400, "invalid_request_error", "Model with id aimock-nonexistent-model not found");
+              assertion(`${id} received status/body (evidence only)`, "passed", "native provider Anthropic catalog vendor observations");
+              assertion(`${id} comparison`, "failed", "native provider Anthropic catalog vendor observations");
+              localContract(`local:${id}`, "anthropic-catalog", `'${id}'`, "native provider catalog local contracts", emptyPage);
+              retain("Anthropic native catalog", `Native catalog comparison ${id}`, "src/response/catalog/anthropic-page.ts",
+                ["anthropicPage", "renderAnthropicModels"], cursor, emptyPage);
+            }
+            const policyKeys = new Set(validatedEntries.flatMap((entry) => (entry.diffs as unknown[]).map((value) =>
+              JSON.stringify([entry.provider, entry.scenario, String(object(value).id ?? object(value).path)]))));
+            const hasOtherCritical = entries.filter((entry) => !validatedEntries.includes(entry)).some((entry) => Array.isArray(entry.diffs) && entry.diffs.some((diff) => object(diff).severity === "critical"));
             const quarantineCount = Array.isArray(report.quarantine) ? report.quarantine.length : 0;
             const timeoutCount = Array.isArray(report.timeouts) ? report.timeouts.length : 0;
             const keys = new Set((intentional[0].diffs as unknown[]).map((value) => String(object(value).id ?? object(value).path)));
-            return { effectiveExit: hasOtherCritical ? 2 : quarantineCount > 0 ? 5 : timeoutCount > 0 ? 6 : 0, invocationId: invocation.invocationId, keys };
+            return { effectiveExit: hasOtherCritical ? 2 : quarantineCount > 0 ? 5 : timeoutCount > 0 ? 6 : 0, invocationId: invocation.invocationId, keys, policyKeys };
           };
           const mode = process.env.NATIVE_DISPOSITION_MODE ?? "delta";
           if (mode === "scheduled-retry") {
@@ -1167,7 +1241,7 @@ jobs:
                 process.env.NATIVE_OBSERVATIONS_PATH ?? "drift-observations.json", process.env.NATIVE_EVIDENCE_DIR ?? "drift-evidence");
               const rawExit = Number(process.env.NATIVE_RAW_EXIT_CODE);
               const effectiveExit = rawExit === 2 ? disposition.effectiveExit : rawExit;
-              console.log(JSON.stringify({ rawExit, effectiveExit, invocationId: disposition.invocationId, policy: "validated intentional default divergence" }));
+              console.log(JSON.stringify({ rawExit, effectiveExit, invocationId: disposition.invocationId, policy: "validated documented native policy differences" }));
               process.exit(mode === "cache" && effectiveExit !== 0 ? 1 : 0);
             } catch (error) {
               console.error(`Native disposition unavailable: ${String(error)}`);
@@ -1184,11 +1258,10 @@ jobs:
           let block = originalBlock;
           if (process.env.ANTHROPIC_API_KEY) {
             const native = classifyNative("drift-report-head.json", "drift-observations-head.json", process.env.NATIVE_EVIDENCE_DIR ?? "drift-evidence");
-            const intentional = block.filter((key) => key.provider === "Anthropic native authentication and version" &&
-              key.scenario === "intentional default divergence" && native.keys.has(key.id));
+            const intentional = block.filter((key) => native.policyKeys.has(JSON.stringify([key.provider, key.scenario, key.id])));
             block = block.filter((key) => !intentional.includes(key));
             advisory.push(...intentional);
-            console.log(`::notice title=intentional native policy::${intentional.length} validated default-policy keys retained in raw artifacts`);
+            console.log(`::notice title=intentional native policy::${intentional.length} validated documented-policy keys retained in raw artifacts`);
           }
           const fmt = (k: DeltaKey) =>
             `${k.provider} ${k.id}${k.class ? ` [${k.class}]` : ""}`;
@@ -1197,18 +1270,18 @@ jobs:
           summary.push("## Drift delta");
           summary.push("");
           summary.push(`- block (new-in-head): ${block.length}`);
-          summary.push(`- advisory (base-present): ${advisory.length}`);
+          summary.push(`- advisory (base-present or validated documented policy): ${advisory.length}`);
           summary.push(`- fixed (gone in head): ${fixed.length}`);
 
           // Advisory: pre-existing / environmental drift. Surface it as a
           // NEUTRAL annotation (::notice::) and in the summary, but do NOT fail
           // the check on it — that drift is the daily main job's concern.
           for (const k of advisory) {
-            console.log(`::notice title=drift-advisory (pre-existing)::${fmt(k)}`);
+            console.log(`::notice title=drift-advisory (base-present or validated documented policy)::${fmt(k)}`);
           }
           if (advisory.length > 0) {
             summary.push("");
-            summary.push("### Advisory (pre-existing on main - not blamed on this PR)");
+            summary.push("### Advisory (base-present or validated documented policy)");
             for (const k of advisory) summary.push(`- ${fmt(k)}`);
           }
 
@@ -1236,7 +1309,7 @@ jobs:
           }
           console.log(
             advisory.length > 0
-              ? `Drift gate PASSED: ${advisory.length} advisory (pre-existing) finding(s) surfaced, none new-in-head.`
+              ? `Drift gate PASSED: ${advisory.length} advisory (base-present or validated documented policy) finding(s) surfaced, none blocking.`
               : "Drift gate PASSED: no new-in-head drift.",
           );
           DELTAGATE
