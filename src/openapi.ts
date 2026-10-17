@@ -687,6 +687,19 @@ const COMPONENTS: Record<string, unknown> = {
       embedding: { type: "array", items: { type: "number" } },
     },
   },
+  OllamaCurrentEmbedRequest: {
+    allOf: [{ $ref: "#/components/schemas/OllamaEmbedRequest" }],
+    type: "object",
+    properties: { dimensions: { type: "integer", minimum: 1, maximum: 100000 } },
+  },
+  OllamaCurrentEmbedResponse: {
+    type: "object",
+    required: ["model", "embeddings"],
+    properties: {
+      model: { type: "string" },
+      embeddings: { type: "array", items: { type: "array", items: { type: "number" } } },
+    },
+  },
   OllamaTagsResponse: {
     type: "object",
     properties: {
@@ -2577,7 +2590,10 @@ const SCHEMA_REFS: Record<string, OperationSchemas> = {
   "POST /api/chat": { request: "OllamaChatRequest", response: "OllamaChatResponse" },
   "POST /api/generate": { request: "OllamaGenerateRequest", response: "OllamaGenerateResponse" },
   "POST /api/embeddings": { request: "OllamaEmbedRequest", response: "OllamaEmbedResponse" },
-  "POST /api/embed": { request: "OllamaEmbedRequest", response: "OllamaEmbedResponse" },
+  "POST /api/embed": {
+    request: "OllamaCurrentEmbedRequest",
+    response: "OllamaCurrentEmbedResponse",
+  },
   "GET /api/tags": { response: "OllamaTagsResponse" },
   // OpenAI Batches API
   "POST /v1/batches/{batch_id}/cancel": { response: "BatchObject" },

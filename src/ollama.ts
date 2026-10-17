@@ -10,7 +10,7 @@
  * - Streaming uses NDJSON, not SSE
  * - Tool call arguments are objects, not JSON strings
  * - Tool calls have no id field
- * - Embeddings return a single `embedding` array, not an array of objects
+ * - Legacy embeddings return `embedding`; /api/embed returns `embeddings`
  */
 
 import type * as http from "node:http";
@@ -30,9 +30,12 @@ import {
   isCombinedFixtureResponse,
   isErrorResponse,
   isEmbeddingResponse,
+  isJSONResponse,
   validateChatMessages,
   validateToolsField,
   normalizeEmbeddingInput,
+  validateEmbeddingDimensions,
+  MAX_EMBEDDING_DIMENSIONS,
   resolveFixtureBlocks,
   resolveFixtureBlockOutcome,
   generateDeterministicEmbedding,
@@ -1582,6 +1585,7 @@ interface OllamaEmbeddingsRequest {
   model: string;
   prompt?: string;
   input?: string | string[];
+  dimensions?: number;
 }
 
 // ─── Request handler: /api/embeddings ───────────────────────────────────────
@@ -1599,6 +1603,9 @@ export async function handleOllamaEmbeddings(
   setCorsHeaders(res);
 
   const urlPath = req.url ?? "/api/embeddings";
+  const currentEndpoint = urlPath.split("?")[0] === "/api/embed";
+
+  const errorWire = currentEndpoint ? "ollama-embed" : "ollama";
 
   let embReq: OllamaEmbeddingsRequest;
   try {
@@ -1615,7 +1622,7 @@ export async function handleOllamaEmbeddings(
     writeErrorResponse(
       res,
       400,
-      renderError("ollama", "validation", {
+      renderError(errorWire, "validation", {
         message: `Malformed JSON body: ${detail}`,
         type: "invalid_request_error",
       }).body,
@@ -1637,7 +1644,7 @@ export async function handleOllamaEmbeddings(
     writeErrorResponse(
       res,
       400,
-      renderError("ollama", "validation", {
+      renderError(errorWire, "validation", {
         message: "Request body must be a JSON object",
         type: "invalid_request_error",
       }).body,
@@ -1648,8 +1655,7 @@ export async function handleOllamaEmbeddings(
   // Reject wrong-typed prompt/input before `.slice()` / `.join()` below read
   // them — a number passes the presence checks and then throws a TypeError.
   // `null` means "absent" on both fields, matching the `??` fall-through below.
-  // `input` is checked with the repo's shared `normalizeEmbeddingInput`, which
-  // also accepts the pre-tokenized `number[]` / `number[][]` shapes.
+  // Keep the accepted token-array extension on both endpoints.
   const promptShapeError =
     embReq.prompt !== undefined && embReq.prompt !== null && typeof embReq.prompt !== "string"
       ? "prompt field must be a string"
@@ -1669,7 +1675,7 @@ export async function handleOllamaEmbeddings(
     writeErrorResponse(
       res,
       400,
-      renderError("ollama", "validation", {
+      renderError(errorWire, "validation", {
         message: `Invalid request: ${promptShapeError}`,
         type: "invalid_request_error",
       }).body,
@@ -1677,13 +1683,18 @@ export async function handleOllamaEmbeddings(
     return;
   }
 
-  // Ollama accepts either "prompt" or "input" for the text to embed
-  const inputText =
-    embReq.prompt ??
-    (typeof embReq.input === "string" ? embReq.input : undefined) ??
-    (Array.isArray(embReq.input) ? embReq.input.join(" ") : undefined);
+  // Prefer input on the current endpoint, with the existing prompt fallback.
+  // The legacy endpoint keeps prompt precedence.
+  const inputs = normalizeEmbeddingInput(
+    currentEndpoint ? (embReq.input ?? embReq.prompt) : (embReq.prompt ?? embReq.input),
+  );
+  const inputText = currentEndpoint
+    ? inputs?.join(" ")
+    : (embReq.prompt ??
+      (typeof embReq.input === "string" ? embReq.input : undefined) ??
+      (Array.isArray(embReq.input) ? embReq.input.join(" ") : undefined));
 
-  if (!embReq.model) {
+  if (!embReq.model || (currentEndpoint && typeof embReq.model !== "string")) {
     journal.add({
       method: req.method ?? "POST",
       path: urlPath,
@@ -1694,7 +1705,7 @@ export async function handleOllamaEmbeddings(
     writeErrorResponse(
       res,
       400,
-      renderError("ollama", "validation", {
+      renderError(errorWire, "validation", {
         message: "Invalid request: model field is required",
         type: "invalid_request_error",
       }).body,
@@ -1713,7 +1724,7 @@ export async function handleOllamaEmbeddings(
     writeErrorResponse(
       res,
       400,
-      renderError("ollama", "validation", {
+      renderError(errorWire, "validation", {
         message: "Invalid request: prompt or input field is required",
         type: "invalid_request_error",
       }).body,
@@ -1783,9 +1794,29 @@ export async function handleOllamaEmbeddings(
         body: syntheticReq,
         response: { status, fixture },
       });
-      writeErrorResponse(res, status, renderError("openai", "fixture", response.error).body, {
-        retryAfter: response.retryAfter,
+      writeErrorResponse(
+        res,
+        status,
+        renderError(currentEndpoint ? "ollama-embed" : "openai", "fixture", response.error).body,
+        {
+          retryAfter: response.retryAfter,
+        },
+      );
+      return;
+    }
+
+    // Recorded current-endpoint batches retain every vector and provider metadata.
+    if (currentEndpoint && isJSONResponse(response)) {
+      const status = response.status ?? 200;
+      journal.add({
+        method: req.method ?? "POST",
+        path: urlPath,
+        headers: flattenHeaders(req.headers),
+        body: syntheticReq,
+        response: { status, fixture },
       });
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(response.json));
       return;
     }
 
@@ -1798,10 +1829,9 @@ export async function handleOllamaEmbeddings(
         body: syntheticReq,
         response: { status: 200, fixture },
       });
-      const body = {
-        model: embReq.model,
-        embedding: [...response.embedding],
-      };
+      const body = currentEndpoint
+        ? { model: embReq.model, embeddings: (inputs ?? []).map(() => [...response.embedding]) }
+        : { model: embReq.model, embedding: [...response.embedding] };
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(body));
       return;
@@ -1818,7 +1848,7 @@ export async function handleOllamaEmbeddings(
     writeErrorResponse(
       res,
       500,
-      renderError("ollama", "unknown-response", {
+      renderError(errorWire, "unknown-response", {
         message:
           "Fixture response did not match any known embedding type (must have embedding or error)",
         type: "server_error",
@@ -1846,7 +1876,7 @@ export async function handleOllamaEmbeddings(
     writeErrorResponse(
       res,
       503,
-      renderError("ollama", "strict-miss", {
+      renderError(errorWire, "strict-miss", {
         message: strictMessage,
         type: "invalid_request_error",
       }).body,
@@ -1878,11 +1908,30 @@ export async function handleOllamaEmbeddings(
     }
   }
 
+  const dimensions = currentEndpoint ? validateEmbeddingDimensions(embReq.dimensions) : 1536;
+  if (dimensions === null) {
+    journal.add({
+      method: req.method ?? "POST",
+      path: urlPath,
+      headers: flattenHeaders(req.headers),
+      body: syntheticReq,
+      response: { status: 400, fixture: null },
+    });
+    writeErrorResponse(
+      res,
+      400,
+      renderError(errorWire, "validation", {
+        message: `Invalid request: dimensions must be an integer between 1 and ${MAX_EMBEDDING_DIMENSIONS}`,
+        type: "invalid_request_error",
+      }).body,
+    );
+    return;
+  }
+
   // No fixture match — generate deterministic embedding from input text
   logger.warn(
     `No embedding fixture matched for "${inputText.slice(0, 80)}" — returning deterministic fallback`,
   );
-  const embedding = generateDeterministicEmbedding(inputText);
 
   journal.add({
     method: req.method ?? "POST",
@@ -1892,10 +1941,14 @@ export async function handleOllamaEmbeddings(
     response: { status: 200, fixture: null },
   });
 
-  const body = {
-    model: embReq.model,
-    embedding,
-  };
+  const body = currentEndpoint
+    ? {
+        model: embReq.model,
+        embeddings: (inputs ?? []).map((input) =>
+          generateDeterministicEmbedding(input, dimensions),
+        ),
+      }
+    : { model: embReq.model, embedding: generateDeterministicEmbedding(inputText) };
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
 }

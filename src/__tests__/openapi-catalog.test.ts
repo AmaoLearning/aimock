@@ -1200,18 +1200,27 @@ describe("OpenAPI route catalog", () => {
     });
     expect(response.status).toBe(200);
     const body = await response.json();
-    expect(Object.keys(body).sort()).toEqual(["embedding", "model"]);
+    const current = path === "/api/embed";
+    expect(Object.keys(body).sort()).toEqual([current ? "embeddings" : "embedding", "model"]);
     expect(body.model).toBe("nomic-embed-text");
-    expect(Array.isArray(body.embedding)).toBe(true);
-    expect(body.embedding.length).toBeGreaterThan(0);
-    for (const value of body.embedding) expect(typeof value).toBe("number");
+    const vectors = current ? body.embeddings : [body.embedding];
+    expect(vectors.length).toBeGreaterThan(0);
+    for (const vector of vectors) {
+      expect(Array.isArray(vector)).toBe(true);
+      expect(vector.length).toBeGreaterThan(0);
+      for (const value of vector) expect(typeof value).toBe("number");
+    }
 
     const operation = doc.paths[path].post;
     expect(operation.requestBody.content["application/json"].schema).toEqual({
-      $ref: "#/components/schemas/OllamaEmbedRequest",
+      $ref: current
+        ? "#/components/schemas/OllamaCurrentEmbedRequest"
+        : "#/components/schemas/OllamaEmbedRequest",
     });
     expect(operation.responses["200"].content["application/json"].schema).toEqual({
-      $ref: "#/components/schemas/OllamaEmbedResponse",
+      $ref: current
+        ? "#/components/schemas/OllamaCurrentEmbedResponse"
+        : "#/components/schemas/OllamaEmbedResponse",
     });
     expect.soft(doc.components.schemas.OllamaEmbedRequest).toEqual({
       type: "object",
@@ -1234,6 +1243,21 @@ describe("OpenAPI route catalog", () => {
         },
       },
     });
+    if (current) {
+      expect(doc.components.schemas.OllamaCurrentEmbedRequest).toEqual({
+        allOf: [{ $ref: "#/components/schemas/OllamaEmbedRequest" }],
+        type: "object",
+        properties: { dimensions: { type: "integer", minimum: 1, maximum: 100000 } },
+      });
+      expect(doc.components.schemas.OllamaCurrentEmbedResponse).toEqual({
+        type: "object",
+        required: ["model", "embeddings"],
+        properties: {
+          model: { type: "string" },
+          embeddings: { type: "array", items: { type: "array", items: { type: "number" } } },
+        },
+      });
+    }
     expect.soft(doc.components.schemas.OllamaEmbedResponse).toEqual({
       type: "object",
       required: ["model", "embedding"],
@@ -1261,7 +1285,10 @@ describe("OpenAPI route catalog", () => {
         });
         expect(response.status).toBe(400);
         expect(await response.json()).toMatchObject({
-          error: { message: "Invalid request: prompt or input field is required" },
+          error:
+            path === "/api/embed"
+              ? "Invalid request: prompt or input field is required"
+              : { message: "Invalid request: prompt or input field is required" },
         });
       }
     },

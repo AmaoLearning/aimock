@@ -18,6 +18,11 @@
 
 ### Fixed
 
+- Bedrock SDK examples configure `NodeHttpHandler` for aimock's HTTP/1 server; the current SDK's default HTTP/2 transport remains unsupported.
+
+- Ollama `/api/embed` returns an `embeddings` matrix with one vector per input, honors fallback dimensions, and retains batch vectors and metadata through recording/replay. `/api/embeddings` keeps its legacy single-vector response.
+- AG-UI convenience helpers use each request's thread/run IDs and create fresh message/tool-call IDs. Explicit event fixtures retain their authored IDs.
+
 - Anthropic model lists reject unknown `after_id` and `before_id` cursors with 400 `invalid_request_error`, including when a lifecycle filter would return an empty page. Valid cursors and OpenAI-style lists keep their existing paging behavior.
 - Shared `/v1/models` paths select the Anthropic catalog when `anthropic-version` is present, or when `x-api-key` is present without `Authorization`. Non-Anthropic clients that use `x-api-key` alone also receive that catalog. Use `Authorization` without `anthropic-version` to retain the OpenAI format.
 - Configured inbound authentication returns native 401 bodies on Anthropic Messages/count and Gemini/Vertex Google HTTP paths. Anthropic adds a `request-id` response header. Shared model paths and WebSocket rejections retain their existing bodies. Anthropic's upstream diagnostic message and body `request_id` differ. The observed Gemini gateway 403 differs from aimock's intentional inbound 401.

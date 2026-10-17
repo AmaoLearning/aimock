@@ -38,6 +38,7 @@ export const errorProfiles = {
     toolArgumentType: "InternalServerException",
   },
   ollama: { fixtureType: "server_error", validationType: "invalid_request_error" },
+  "ollama-embed": { fixtureType: "server_error", validationType: "invalid_request_error" },
   cohere: { fixtureType: "server_error", validationType: "invalid_request_error" },
   interactions: { fixtureType: "server_error", validationType: "invalid_request_error" },
   gemini: { fixtureType: "server_error", validationType: "invalid_request_error" },

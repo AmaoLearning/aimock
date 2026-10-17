@@ -95,6 +95,9 @@ export function renderError(
   purpose: ErrorPurpose,
   details: ErrorDetails,
 ): { body: string; headers?: Record<string, string> } {
+  if (wire === "ollama-embed") {
+    return { body: JSON.stringify({ error: details.message }) };
+  }
   const profile = errorProfiles[wire];
   if (
     wire === "interactions" &&
