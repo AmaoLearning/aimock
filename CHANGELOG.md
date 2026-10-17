@@ -12,8 +12,13 @@
 
 - Responses API (HTTP, SSE, WebSocket): optional `phase` response override (`commentary` | `final_answer`) on assistant message output items; validated on load (#531)
 
+### Changed
+
+- **Authentication error compatibility:** configured inbound auth no longer returns the string `error.code: "invalid_api_key"` on Anthropic Messages/count and Gemini/Vertex Google HTTP paths. Anthropic omits `error.code`; check HTTP 401 or `error.type: "authentication_error"`. Google returns numeric `error.code: 401`; check HTTP 401 or `error.status: "UNAUTHENTICATED"`. Update clients and tests that read the old field. Shared `/v1/models` and WebSocket rejections keep their existing bodies.
+
 ### Fixed
 
+- Anthropic model lists reject unknown `after_id` and `before_id` cursors with 400 `invalid_request_error`, including when a lifecycle filter would return an empty page. Valid cursors and OpenAI-style lists keep their existing paging behavior.
 - Shared `/v1/models` paths select the Anthropic catalog when `anthropic-version` is present, or when `x-api-key` is present without `Authorization`. Non-Anthropic clients that use `x-api-key` alone also receive that catalog. Use `Authorization` without `anthropic-version` to retain the OpenAI format.
 - Configured inbound authentication returns native 401 bodies on Anthropic Messages/count and Gemini/Vertex Google HTTP paths. Anthropic adds a `request-id` response header. Shared model paths and WebSocket rejections retain their existing bodies. Anthropic's upstream diagnostic message and body `request_id` differ. The observed Gemini gateway 403 differs from aimock's intentional inbound 401.
 

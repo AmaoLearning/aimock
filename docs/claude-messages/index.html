@@ -120,12 +120,11 @@
           page.
         </p>
         <p>
-          Invalid limits and lifecycle values return 400 <code>invalid_request_error</code>. Unknown
-          cursors return an empty page, with null first and last IDs. These error details and cursor
-          results are local contracts. Authenticated upstream probes with unknown
-          <code>after_id</code> and <code>before_id</code> returned 400
-          <code>invalid_request_error</code>. aimock intentionally retains empty pages for those
-          cursors.
+          Invalid limits, lifecycle values, and unknown <code>after_id</code> or
+          <code>before_id</code> cursors return 400 <code>invalid_request_error</code>. Unknown
+          cursors return <code>Model with id &lt;id&gt; not found</code>, matching the status, error
+          type, and message observed in authenticated upstream probes. aimock validates cursors
+          before applying lifecycle filters, including filters that return an empty page.
         </p>
         <p>
           Each model has <code>type: "model"</code>, its ID as <code>display_name</code>,
@@ -184,6 +183,12 @@ curl 'http://localhost:4010/v1/models/claude-test' \
           <div class="code-block-header">Inbound rejection <span class="lang-tag">json</span></div>
           <pre><code>{"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}</code></pre>
         </div>
+        <p>
+          Compatibility change: these paths no longer return
+          <code>error.code: "invalid_api_key"</code>. Check HTTP 401 or
+          <code>error.type: "authentication_error"</code> instead. Update tests and clients that
+          read the old field.
+        </p>
         <p>
           Shared <code>/v1/models</code> paths retain their OpenAI-shaped authentication rejection,
           even with Anthropic headers. WebSocket authentication also retains its existing body.

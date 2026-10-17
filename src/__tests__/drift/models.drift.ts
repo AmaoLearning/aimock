@@ -117,12 +117,30 @@ const anthropicCatalogCases = [
   {
     id: "anthropic-after-unknown",
     query: "after_id=aimock-nonexistent-model",
-    expected: { status: 200, body: emptyAnthropicPage },
+    expected: {
+      status: 400,
+      body: {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message: "Model with id aimock-nonexistent-model not found",
+        },
+      },
+    },
   },
   {
     id: "anthropic-before-unknown",
     query: "before_id=aimock-nonexistent-model",
-    expected: { status: 200, body: emptyAnthropicPage },
+    expected: {
+      status: 400,
+      body: {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message: "Model with id aimock-nonexistent-model not found",
+        },
+      },
+    },
   },
   {
     id: "anthropic-lifecycle-invalid",
