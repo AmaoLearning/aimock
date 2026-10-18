@@ -32,6 +32,7 @@ import { getTestId, slugifyTestId, slugifyContext, hasMintedRequestId } from "./
 import { DEFAULT_TEST_ID } from "./constants.js";
 import { captureUsage } from "./response/usage/recording.js";
 import { renderError } from "./response/errors.js";
+import { getEmbeddingRequest } from "./embedding-request.js";
 
 /** True when an SSE frame completes an OpenAI stream. */
 function isTerminalSSEFrame(frame: string): boolean {
@@ -1046,8 +1047,15 @@ export async function proxyAndRecord(
 
   const matchRequest = defaults.requestTransform ? defaults.requestTransform(request) : request;
   const metadata = buildFixtureMetadata(request);
+  const embeddingRequest = getEmbeddingRequest(request);
   const fixture: Fixture = {
-    match: buildFixtureMatch(matchRequest, defaults.record),
+    match: {
+      ...buildFixtureMatch(matchRequest, defaults.record),
+      ...(embeddingRequest && {
+        embeddingRequest: structuredClone(embeddingRequest),
+        ...(matchRequest.model !== undefined && { model: matchRequest.model }),
+      }),
+    },
     response: fixtureResponse,
     ...(recordedTimings && { recordedTimings }),
     ...(metadata && { metadata }),

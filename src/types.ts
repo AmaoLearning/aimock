@@ -195,6 +195,17 @@ export interface FixtureMatch {
    */
   systemMessage?: string | string[] | RegExp;
   inputText?: string | RegExp;
+  /**
+   * Exact embedding operation, input shape and requested dimensions. Recordings
+   * set this to keep batches and widths distinct across Ollama and OpenAI wire
+   * formats. Omit this field for broad fixtures. Values preserve the wire JSON,
+   * including invalid arguments when recording an upstream error response.
+   */
+  embeddingRequest?: {
+    operation: "/api/embed" | "/api/embeddings" | "/v1/embeddings";
+    input: unknown;
+    dimensions?: unknown;
+  };
   toolCallId?: string;
   /**
    * Substring matched against the text content of the LAST message when that
@@ -1042,6 +1053,8 @@ export interface FixtureFileEntry {
      */
     systemMessage?: string | string[];
     inputText?: string;
+    /** Mirrors the exact embedding request match in FixtureMatch. */
+    embeddingRequest?: FixtureMatch["embeddingRequest"];
     toolCallId?: string;
     /**
      * Substring matched against the last tool-result message's text content.

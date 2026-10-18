@@ -1046,6 +1046,13 @@ try {
 
         <h2 id="model-aware-recording">Model-Aware Recording</h2>
         <p>
+          New Ollama and OpenAI-compatible embedding recordings also keep the operation, exact input
+          shape and requested dimensions in <code>match.embeddingRequest</code>. This separates
+          batches from strings with the same joined text, different widths, and other embedding
+          operations, both while recording and after loading the saved file. Re-record older
+          captures to add this match data.
+        </p>
+        <p>
           When recording fixtures, aimock automatically includes the model name in match criteria.
           This prevents collisions when your app makes multiple LLM calls with the same user message
           but different models (e.g., Opus for chat + Haiku for title generation).

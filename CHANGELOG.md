@@ -4,6 +4,8 @@
 
 ### Added
 
+- Recorded Ollama and OpenAI embedding fixtures include optional `match.embeddingRequest` criteria for the operation, input shape and requested dimensions. Handwritten embedding fixtures without this field keep their broad matching behavior.
+
 - An independent, opt-in required-header policy accepts programmatic options, `llm.policy`, repeatable `--policy` flags on both CLIs, and `X-AIMock-Policy` request headers. Defaults remain off, including strict-only requests. Enforced Anthropic version rejection returns 400 with a safe correlated `request_id`. The recorder strips the policy header before HTTP forwarding. ([#542](https://github.com/CopilotKit/aimock/pull/542))
 
 - Anthropic Messages and Bedrock Claude invoke responses preserve fixture cache usage, including the cache TTL breakdown. Record mode retains token counts and cache usage for replay.
@@ -20,7 +22,7 @@
 
 - Bedrock SDK examples configure `NodeHttpHandler` for aimock's HTTP/1 server; the current SDK's default HTTP/2 transport remains unsupported.
 
-- Ollama `/api/embed` returns an `embeddings` matrix with one vector per input, honors fallback dimensions, and retains batch vectors and metadata through recording/replay. `/api/embeddings` keeps its legacy single-vector response.
+- Ollama `/api/embed` returns an `embeddings` matrix with one vector per input, honors fallback dimensions, and retains batch vectors and metadata through recording/replay. Recorded matches preserve input shape, dimensions, model and operation, so different requests do not reuse the wrong batch or match legacy/OpenAI embedding routes. `/api/embeddings` keeps its legacy single-vector response.
 - AG-UI convenience helpers use each request's thread/run IDs and create fresh message/tool-call IDs. Explicit event fixtures retain their authored IDs.
 
 - Anthropic model lists reject unknown `after_id` and `before_id` cursors with 400 `invalid_request_error`, including when a lifecycle filter would return an empty page. Valid cursors and OpenAI-style lists keep their existing paging behavior.

@@ -7,6 +7,7 @@
  */
 
 import type * as http from "node:http";
+import { setEmbeddingRequest } from "./embedding-request.js";
 import { resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
 import { renderError } from "./response/errors.js";
 import type {
@@ -191,6 +192,11 @@ export async function handleEmbeddings(
     _endpointType: "embedding",
     _context: getContext(req),
   };
+  setEmbeddingRequest(syntheticReq, {
+    operation: "/v1/embeddings",
+    input: embeddingReq.input,
+    ...(embeddingReq.dimensions !== undefined && { dimensions: embeddingReq.dimensions }),
+  });
 
   const testId = getTestId(req);
   const { fixture, skippedBySequenceOrTurn } = selectFixtureForServing(

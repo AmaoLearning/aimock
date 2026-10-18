@@ -14,6 +14,7 @@
  */
 
 import type * as http from "node:http";
+import { setEmbeddingRequest } from "./embedding-request.js";
 import type {
   ChatCompletionRequest,
   ChatMessage,
@@ -1740,6 +1741,13 @@ export async function handleOllamaEmbeddings(
     _endpointType: "embedding",
     _context: getContext(req),
   };
+  setEmbeddingRequest(syntheticReq, {
+    operation: currentEndpoint ? "/api/embed" : "/api/embeddings",
+    input: currentEndpoint
+      ? (embReq.input ?? embReq.prompt ?? "")
+      : (embReq.prompt ?? embReq.input ?? ""),
+    ...(embReq.dimensions !== undefined && { dimensions: embReq.dimensions }),
+  });
 
   const testId = getTestId(req);
   const { fixture, skippedBySequenceOrTurn } = matchFixtureDiagnostic(

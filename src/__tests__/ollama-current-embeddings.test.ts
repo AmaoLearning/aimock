@@ -55,6 +55,124 @@ test("Ollama SDK embed preserves ordered batch vectors through recording and off
   expect(await new Ollama({ host: replay.url }).embed(input)).toEqual(expected);
 });
 
+test("Ollama recordings distinguish successive input shapes, dimensions and models on disk", async () => {
+  const cases = [
+    {
+      request: { model: "embed", input: ["first", "second"], dimensions: 2 },
+      embeddings: [
+        [1, 2],
+        [3, 4],
+      ],
+    },
+    {
+      request: { model: "embed", input: ["first", "second"], dimensions: 3 },
+      embeddings: [
+        [5, 6, 7],
+        [8, 9, 10],
+      ],
+    },
+    { request: { model: "embed", input: "first second", dimensions: 2 }, embeddings: [[11, 12]] },
+    {
+      request: { model: "embed", input: "first second", dimensions: 3 },
+      embeddings: [[13, 14, 15]],
+    },
+    { request: { model: "embed", input: ["first second"], dimensions: 2 }, embeddings: [[16, 17]] },
+    {
+      request: { model: "embed", input: ["second", "first"], dimensions: 2 },
+      embeddings: [
+        [18, 19],
+        [20, 21],
+      ],
+    },
+    {
+      request: { model: "embed", input: ["first", "second"], dimensions: undefined },
+      embeddings: [[22], [23]],
+    },
+    {
+      request: { model: "other", input: ["first", "second"], dimensions: 2 },
+      embeddings: [
+        [24, 25],
+        [26, 27],
+      ],
+    },
+  ];
+  let calls = 0;
+  upstream = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+    });
+    req.on("end", () => {
+      calls++;
+      const body = JSON.parse(raw);
+      const entry = cases.find(
+        ({ request }) =>
+          request.model === body.model &&
+          request.dimensions === body.dimensions &&
+          JSON.stringify(request.input) === JSON.stringify(body.input),
+      );
+      res.writeHead(entry ? 200 : 400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify(
+          entry
+            ? { model: entry.request.model, embeddings: entry.embeddings }
+            : { error: "Unexpected request" },
+        ),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => upstream!.listen(0, "127.0.0.1", resolve));
+  const address = upstream.address();
+  if (!address || typeof address === "string") throw new Error("No upstream port");
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), "aimock-ollama-identity-"));
+  const recorder = new LLMock({
+    port: 0,
+    logLevel: "silent",
+    record: {
+      providers: { ollama: `http://127.0.0.1:${address.port}` },
+      fixturePath: directory,
+    },
+  });
+  mocks.push(recorder);
+  await recorder.start();
+  const recordingClient = new Ollama({ host: recorder.url });
+  for (const entry of cases) {
+    expect(await recordingClient.embed(entry.request)).toEqual({
+      model: entry.request.model,
+      embeddings: entry.embeddings,
+    });
+  }
+  expect(calls).toBe(cases.length);
+  // Repeat in reverse order while recording: each request must hit its own cache entry.
+  for (const entry of [...cases].reverse()) {
+    expect(await recordingClient.embed(entry.request)).toEqual({
+      model: entry.request.model,
+      embeddings: entry.embeddings,
+    });
+  }
+  expect(calls).toBe(cases.length);
+  await recorder.stop();
+  mocks.splice(mocks.indexOf(recorder), 1);
+  await new Promise<void>((resolve) => upstream!.close(() => resolve()));
+  const replay = new LLMock({ port: 0, logLevel: "silent", strict: true });
+  replay.loadFixtureDir(directory);
+  mocks.push(replay);
+  await replay.start();
+  const offlineClient = new Ollama({ host: replay.url });
+  for (const entry of [...cases].reverse()) {
+    expect(await offlineClient.embed(entry.request)).toEqual({
+      model: entry.request.model,
+      embeddings: entry.embeddings,
+    });
+  }
+  await expect(
+    offlineClient.embed({ model: "embed", input: ["first", "second"], dimensions: 4 }),
+  ).rejects.toMatchObject({ status_code: 503 });
+  await expect(
+    offlineClient.embed({ model: "embed", input: ["first", "second third"], dimensions: 2 }),
+  ).rejects.toMatchObject({ status_code: 503 });
+});
+
 test("Ollama SDK embeds each batch item independently with the requested dimensions", async () => {
   const mock = new LLMock({ port: 0, logLevel: "silent" });
   mocks.push(mock);
@@ -70,6 +188,136 @@ test("Ollama SDK embeds each batch item independently with the requested dimensi
   expect(batch.embeddings[0]).not.toEqual(batch.embeddings[1]);
   const single = await client.embed({ model: "nomic-embed-text", input: "second", dimensions: 8 });
   expect(single.embeddings).toEqual([batch.embeddings[1]]);
+});
+
+test.each([
+  { endpoint: "/api/embeddings", legacyFirst: false },
+  { endpoint: "/api/embeddings", legacyFirst: true },
+  { endpoint: "/v1/embeddings", legacyFirst: false },
+  { endpoint: "/v1/embeddings", legacyFirst: true },
+])(
+  "modern Ollama recordings stay separate from $endpoint, legacyFirst=$legacyFirst",
+  async ({ endpoint, legacyFirst }) => {
+    const modern = { model: "embed", embeddings: [[0.1, 0.2]] };
+    const wide = { model: "embed", embeddings: [[0.7, 0.8, 0.9]] };
+    const request = { model: "embed", input: "same text", dimensions: 2 };
+    let calls = 0;
+    upstream = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => {
+        raw += chunk;
+      });
+      req.on("end", () => {
+        calls++;
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify(
+            req.url === "/api/embed"
+              ? JSON.parse(raw).dimensions === 3
+                ? wide
+                : modern
+              : req.url === "/api/embeddings"
+                ? { embedding: [0.3, 0.4] }
+                : {
+                    object: "list",
+                    model: "embed",
+                    data: [{ object: "embedding", index: 0, embedding: [0.3, 0.4] }],
+                    usage: { prompt_tokens: 1, total_tokens: 1 },
+                  },
+          ),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => upstream!.listen(0, "127.0.0.1", resolve));
+    const address = upstream.address();
+    if (!address || typeof address === "string") throw new Error("No upstream port");
+    const url = `http://127.0.0.1:${address.port}`;
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "aimock-ollama-operation-"));
+    const recorder = new LLMock({
+      port: 0,
+      logLevel: "silent",
+      record: { providers: { ollama: url, openai: url }, fixturePath: directory },
+    });
+    mocks.push(recorder);
+    await recorder.start();
+    if (!legacyFirst)
+      expect(await new Ollama({ host: recorder.url }).embed(request)).toEqual(modern);
+    const recordingResponse = await fetch(`${recorder.url}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        endpoint === "/api/embeddings" ? { model: "embed", prompt: "same text" } : request,
+      ),
+    });
+    expect(recordingResponse.status).toBe(200);
+    const recordingBody = await recordingResponse.json();
+    expect(
+      endpoint === "/api/embeddings" ? recordingBody.embedding : recordingBody.data[0].embedding,
+    ).toEqual([0.3, 0.4]);
+    expect(await new Ollama({ host: recorder.url }).embed(request)).toEqual(modern);
+    expect(await new Ollama({ host: recorder.url }).embed({ ...request, dimensions: 3 })).toEqual(
+      wide,
+    );
+    expect(calls).toBe(3);
+    await recorder.stop();
+    mocks.splice(mocks.indexOf(recorder), 1);
+    await new Promise<void>((resolve) => upstream!.close(() => resolve()));
+    const replay = new LLMock({ port: 0, logLevel: "silent", strict: true });
+    replay.loadFixtureDir(directory);
+    mocks.push(replay);
+    await replay.start();
+    const response = await fetch(`${replay.url}${endpoint}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(
+        endpoint === "/api/embeddings" ? { model: "embed", prompt: "same text" } : request,
+      ),
+    });
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(endpoint === "/api/embeddings" ? body.embedding : body.data[0].embedding).toEqual([
+      0.3, 0.4,
+    ]);
+    expect(await new Ollama({ host: replay.url }).embed(request)).toEqual(modern);
+    expect(await new Ollama({ host: replay.url }).embed({ ...request, dimensions: 3 })).toEqual(
+      wide,
+    );
+  },
+);
+
+test("Ollama request widths keep independent fixture sequences", async () => {
+  const mock = new LLMock({ port: 0, logLevel: "silent", strict: true });
+  const cases = [
+    { dimensions: 2, sequenceIndex: 0, embedding: [0.1, 0.2] },
+    { dimensions: 2, sequenceIndex: 1, embedding: [0.3, 0.4] },
+    { dimensions: 3, sequenceIndex: 0, embedding: [0.5, 0.6, 0.7] },
+    { dimensions: 3, sequenceIndex: 1, embedding: [0.8, 0.9, 1.0] },
+  ];
+  for (const entry of cases) {
+    mock.addFixture({
+      match: {
+        endpoint: "embedding",
+        inputText: "same text",
+        sequenceIndex: entry.sequenceIndex,
+        embeddingRequest: {
+          operation: "/api/embed",
+          input: "same text",
+          dimensions: entry.dimensions,
+        },
+      },
+      response: { embedding: entry.embedding },
+    });
+  }
+  mocks.push(mock);
+  await mock.start();
+  const client = new Ollama({ host: mock.url });
+  for (const index of [0, 2, 1, 3]) {
+    const entry = cases[index];
+    expect(
+      (await client.embed({ model: "embed", input: "same text", dimensions: entry.dimensions }))
+        .embeddings,
+    ).toEqual([entry.embedding]);
+  }
 });
 
 test.each([

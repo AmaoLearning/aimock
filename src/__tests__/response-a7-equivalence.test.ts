@@ -9,7 +9,13 @@ import { handleEmbeddings } from "../embeddings.js";
 import { Journal } from "../journal.js";
 import { Logger } from "../logger.js";
 import { createServer, type ServiceFixtures } from "../server.js";
-import type { Fixture, FixtureResponse, HandlerDefaults, MockServerOptions } from "../types.js";
+import type {
+  Fixture,
+  FixtureFile,
+  FixtureResponse,
+  HandlerDefaults,
+  MockServerOptions,
+} from "../types.js";
 import {
   captureHttp,
   expectGolden,
@@ -369,7 +375,32 @@ async function recordCase(
     const fixtureFiles: unknown[] = readdirSync(dir)
       .filter((file) => file.endsWith(".json"))
       .sort()
-      .map((file) => JSON.parse(readFileSync(join(dir, file), "utf8")));
+      .map((file) => {
+        const recorded: FixtureFile = JSON.parse(readFileSync(join(dir, file), "utf8"));
+        if (route.id !== "embedding") return recorded;
+        expect(recorded.fixtures).toHaveLength(1);
+        // Assert the intentional recording-format additions before comparing
+        // the unchanged wire, journal and prior fixture fields to the baseline.
+        expect(recorded.fixtures[0].match).toEqual({
+          endpoint: "embedding",
+          inputText: "a7 request",
+          embeddingRequest: {
+            operation: "/v1/embeddings",
+            input: "a7 request",
+            dimensions: 2,
+          },
+          model: "text-embedding-3-small",
+        });
+        return {
+          ...recorded,
+          fixtures: recorded.fixtures.map((fixture) => {
+            const priorMatch = { ...fixture.match };
+            delete priorMatch.embeddingRequest;
+            delete priorMatch.model;
+            return { ...fixture, match: priorMatch };
+          }),
+        };
+      });
     const captured: Capture = {
       id: `${route.id}-${chaos ? "chaos" : "record"}-${strict ? "strict" : "off"}${header ? "-header-off" : ""}`,
       wire,
