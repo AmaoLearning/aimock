@@ -188,7 +188,7 @@ describe("required-version policy on real entry points", () => {
     async (path) => {
       const server = await source({
         auth: { apiKeys: ["accepted"] },
-        policy: { requiredHeaders: "enforce" },
+        policy: { requiredHeaders: "enforce", authErrors: "native" },
       });
       const result = await send(server.url, path, { "x-api-key": "bad" });
       expect(result.status).toBe(401);

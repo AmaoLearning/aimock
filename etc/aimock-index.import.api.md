@@ -964,6 +964,7 @@ export class AimockFakesReportError extends Error {
 
 // @public (undocumented)
 export interface AimockPolicy {
+    authErrors?: "legacy" | "native";
     requiredHeaders?: "off" | "enforce";
 }
 

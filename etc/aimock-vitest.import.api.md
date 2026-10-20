@@ -23,6 +23,7 @@ export interface AimockHandle {
 
 // @public (undocumented)
 interface AimockPolicy {
+    authErrors?: "legacy" | "native";
     requiredHeaders?: "off" | "enforce";
 }
 

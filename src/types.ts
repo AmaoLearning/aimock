@@ -1486,6 +1486,13 @@ export type ResponsesToolsMode = "legacy" | "extended";
 export interface AimockPolicy {
   /** Reject requests missing a provider's required headers. Default "off"; independent of strict. */
   requiredHeaders?: "off" | "enforce";
+  /**
+   * Inbound-auth 401 body. Default "legacy" keeps the 1.45 body on every route:
+   * `{"error":{"message","type":"authentication_error","code":"invalid_api_key"}}`.
+   * "native" returns provider-native bodies on Anthropic Messages/count_tokens and
+   * Gemini/Vertex routes. WebSocket upgrade rejections always use the legacy body.
+   */
+  authErrors?: "legacy" | "native";
 }
 
 export interface MockServerOptions {
