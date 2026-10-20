@@ -73,7 +73,7 @@
             <tr>
               <td>GET</td>
               <td>/v1/models</td>
-              <td>Native paged JSON with Anthropic headers</td>
+              <td>OpenAI list; native paged JSON with <code>modelCatalog=native</code></td>
             </tr>
             <tr>
               <td>GET</td>
@@ -90,16 +90,24 @@
 
         <h2 id="model-catalog">Model Catalog</h2>
         <p>
-          The shared <code>/v1/models</code> list and detail paths select the Anthropic format when
-          <code>anthropic-version</code> is present, or when <code>x-api-key</code> is present
-          without <code>Authorization</code>. Other callers receive the OpenAI format.
+          By default, the shared <code>/v1/models</code> list path returns the OpenAI format for
+          every request, as in aimock 1.45. The Anthropic list is opt-in. Set
+          <code>policy.modelCatalog</code> to <code>"native"</code>, pass
+          <code>--policy modelCatalog=native</code>, or send the request header
+          <code>X-AIMock-Policy: modelCatalog=native</code>. With the opt-in, requests that send
+          <code>anthropic-version</code>, or <code>x-api-key</code> without
+          <code>Authorization</code>, get the Anthropic format. Other callers still get the OpenAI
+          format. The <code>/v1/models/:id</code> detail path uses the same header selection without
+          the opt-in.
         </p>
         <div class="info-box">
           <p>
-            aimock also accepts <code>x-api-key</code> for its own inbound authentication. A
-            non-Anthropic client that uses this header without <code>Authorization</code>
-            receives the Anthropic catalog. To select the OpenAI format, send
-            <code>Authorization: Bearer &lt;key&gt;</code> and omit <code>anthropic-version</code>.
+            The Anthropic SDK sends <code>anthropic-version</code> on every request. If your tests
+            call <code>client.models.list()</code>, start aimock with
+            <code>--policy modelCatalog=native</code> (or
+            <code>policy: { modelCatalog: "native" }</code>). With the opt-in, a non-Anthropic
+            client that sends <code>x-api-key</code> without <code>Authorization</code> also gets
+            the Anthropic catalog.
           </p>
         </div>
         <p>
@@ -134,8 +142,9 @@
         </p>
         <p>
           Detail paths accept raw or percent-encoded slashes in IDs. Missing IDs, malformed escapes,
-          and IDs outside the Anthropic catalog return a native 404. The examples assume fixtures
-          with <code>claude-test</code> and additional Claude IDs.
+          and IDs outside the Anthropic catalog return a native 404. The examples assume aimock runs
+          with <code>--policy modelCatalog=native</code> and fixtures with <code>claude-test</code>
+          and additional Claude IDs.
         </p>
         <div class="code-block">
           <div class="code-block-header">Native catalog <span class="lang-tag">shell</span></div>
@@ -236,9 +245,10 @@ const instance = await createServer([], {
         </div>
         <p>
           Enforcement applies to <code>POST /v1/messages</code>,
-          <code>POST /v1/messages/count_tokens</code>, and Anthropic-flavored
-          <code>GET /v1/models</code> list/detail requests. Bedrock's body-level
-          <code>anthropic_version</code> is separate.
+          <code>POST /v1/messages/count_tokens</code>, Anthropic-flavored
+          <code>GET /v1/models/:id</code> requests, and Anthropic-flavored
+          <code>GET /v1/models</code> list requests with <code>modelCatalog=native</code>. Bedrock's
+          body-level <code>anthropic_version</code> is separate.
         </p>
         <p>
           Authentication runs first. A missing required header then returns 400 before thinking,
@@ -247,10 +257,11 @@ const instance = await createServer([], {
         </p>
         <div class="info-box">
           <p>
-            Shared model paths use the catalog selection described above.
+            Shared model paths use the catalog selection described above. By default the list path
+            is OpenAI-format and the version requirement does not apply to it. On the detail path,
+            and on the list path with <code>modelCatalog=native</code>,
             <code>x-api-key</code> without <code>Authorization</code> selects Anthropic and can
-            trigger the version requirement. To retain the OpenAI format, send
-            <code>Authorization</code> without <code>anthropic-version</code>.
+            trigger the version requirement.
           </p>
         </div>
         <div class="code-block" data-sample="inline:required-policy-reject">

@@ -184,7 +184,40 @@ describe("public policy parser and resolver contract", () => {
       policy.resolvePolicy(defaults(), {
         "x-aimock-policy": "requiredHeaders=enforce,authErrors=native",
       }),
-    ).toEqual({ strict: false, requiredHeaders: "enforce", authErrors: "native" });
+    ).toEqual({
+      strict: false,
+      requiredHeaders: "enforce",
+      authErrors: "native",
+      modelCatalog: "legacy",
+    });
+  });
+
+  it("parses modelCatalog legacy/native and resolves legacy by default", () => {
+    expect(policy.parsePolicyEntry("modelCatalog", "NATIVE")).toEqual({
+      ok: true,
+      key: "modelCatalog",
+      value: "native",
+    });
+    for (const value of ["", "anthropic", 1, null]) {
+      expect(policy.parsePolicyEntry("modelCatalog", value)).toEqual({
+        ok: false,
+        reason: 'expected "legacy" or "native".',
+      });
+    }
+    expect(policy.parsePolicyEntry("ModelCatalog", "native").ok).toBe(false);
+    expect(policy.resolvePolicy(defaults()).modelCatalog).toBe("legacy");
+    expect(policy.resolvePolicy(defaults({ modelCatalog: "native" })).modelCatalog).toBe("native");
+    expect(
+      policy.resolvePolicy(defaults({ modelCatalog: "native" }), {
+        "x-aimock-policy": "modelCatalog=legacy",
+      }).modelCatalog,
+    ).toBe("legacy");
+    expect(policy.resolvePolicy(defaults(), { "x-aimock-policy": "modelCatalog=native" })).toEqual({
+      strict: false,
+      requiredHeaders: "off",
+      authErrors: "legacy",
+      modelCatalog: "native",
+    });
   });
 
   it("ignores invalid object entries independently and warns for malformed containers", () => {
@@ -239,27 +272,44 @@ describe("public policy parser and resolver contract", () => {
       strict: false,
       requiredHeaders: "off",
       authErrors: "legacy",
+      modelCatalog: "legacy",
     });
     expect(policy.resolvePolicy(defaults(undefined, true))).toEqual({
       strict: true,
       requiredHeaders: "off",
       authErrors: "legacy",
+      modelCatalog: "legacy",
     });
     expect(
       policy.resolvePolicy(defaults({ requiredHeaders: "enforce" }, true), {
         "x-aimock-strict": "false",
       }),
-    ).toEqual({ strict: false, requiredHeaders: "enforce", authErrors: "legacy" });
+    ).toEqual({
+      strict: false,
+      requiredHeaders: "enforce",
+      authErrors: "legacy",
+      modelCatalog: "legacy",
+    });
     expect(
       policy.resolvePolicy(defaults({ requiredHeaders: "enforce" }, true), {
         "x-aimock-policy": "requiredHeaders=off",
       }),
-    ).toEqual({ strict: true, requiredHeaders: "off", authErrors: "legacy" });
+    ).toEqual({
+      strict: true,
+      requiredHeaders: "off",
+      authErrors: "legacy",
+      modelCatalog: "legacy",
+    });
     expect(
       policy.resolvePolicy(defaults({ requiredHeaders: "off" }), {
         "x-aimock-policy": "requiredHeaders=enforce",
       }),
-    ).toEqual({ strict: false, requiredHeaders: "enforce", authErrors: "legacy" });
+    ).toEqual({
+      strict: false,
+      requiredHeaders: "enforce",
+      authErrors: "legacy",
+      modelCatalog: "legacy",
+    });
     const warnings: string[] = [];
     expect(
       policy.resolvePolicy(
@@ -267,7 +317,12 @@ describe("public policy parser and resolver contract", () => {
         { "x-aimock-policy": "requiredHeaders=invalid" },
         (warning) => warnings.push(warning),
       ),
-    ).toEqual({ strict: false, requiredHeaders: "enforce", authErrors: "legacy" });
+    ).toEqual({
+      strict: false,
+      requiredHeaders: "enforce",
+      authErrors: "legacy",
+      modelCatalog: "legacy",
+    });
     expect(warnings).toEqual(['Ignoring policy.requiredHeaders: expected "off" or "enforce".']);
   });
 
@@ -299,7 +354,12 @@ describe("public policy parser and resolver contract", () => {
       },
     });
     const resolved = policy.resolvePolicy(input, headers);
-    expect(resolved).toEqual({ strict: true, requiredHeaders: "off", authErrors: "legacy" });
+    expect(resolved).toEqual({
+      strict: true,
+      requiredHeaders: "off",
+      authErrors: "legacy",
+      modelCatalog: "legacy",
+    });
     expect([strictReads, policyReads, headerReads]).toEqual([1, 1, 1]);
     expect(Object.isFrozen(resolved)).toBe(true);
   });

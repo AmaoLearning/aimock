@@ -249,6 +249,7 @@ describe.each(binaries)("built %s policy", (binary) => {
     "requiredHeaders=enforce=off",
     "authErrors=strict",
     "AuthErrors=native",
+    "modelCatalog=anthropic",
   ])("rejects invalid CLI entry %s with usage exit 1", async (entry) => {
     const result = await cli(binary, ["--policy", entry]).exit();
     expect(result.code).toBe(1);
@@ -288,6 +289,54 @@ describe.each(binaries)("built %s policy", (binary) => {
       const optedIn = await captureHttp(nativeUrl + path, init);
       expect(optedIn.status).toBe(401);
       expect(optedIn.body).toBe(native);
+    }
+  });
+
+  it("keeps the 1.45 OpenAI /v1/models list by default and opts into Anthropic", async () => {
+    const legacyUrl = await cli(binary).start();
+    const nativeUrl = await cli(binary, ["--policy", "modelCatalog=native"]).start();
+    const model = "claude-3-5-sonnet-20241022";
+    const cases = [
+      { name: "x-api-key", headers: { "x-api-key": "k" }, native: "anthropic" },
+      {
+        name: "x-api-key + anthropic-version",
+        headers: { "x-api-key": "k", "anthropic-version": "2023-06-01" },
+        native: "anthropic",
+      },
+      { name: "bearer", headers: { authorization: "Bearer k" }, native: "openai" },
+      { name: "no auth", headers: {}, native: "openai" },
+      {
+        name: "anthropic-version",
+        headers: { "anthropic-version": "2023-06-01" },
+        native: "anthropic",
+      },
+    ] as const;
+    const format = (raw: string | undefined) => {
+      const parsed: Record<string, unknown> = JSON.parse(raw ?? "null");
+      if (parsed.object === "list" || parsed.object === "model") return "openai";
+      if ("has_more" in parsed || parsed.type === "model") return "anthropic";
+      return "unknown";
+    };
+    for (const { name, headers, native } of cases) {
+      // The 1.45 list route is OpenAI-format for every header set unless opted in.
+      const listDefault = await captureHttp(legacyUrl + "/v1/models", { headers });
+      expect(listDefault.status, `${name} list`).toBe(200);
+      expect(format(listDefault.body), `${name} list default`).toBe("openai");
+      // 1.45 ignored list query parameters, so Anthropic cursors and limits never 400.
+      const pagedDefault = await captureHttp(legacyUrl + "/v1/models?limit=0&after_id=missing", {
+        headers,
+      });
+      expect(pagedDefault.status, `${name} paged list`).toBe(200);
+      expect(format(pagedDefault.body), `${name} paged list default`).toBe("openai");
+      const listNative = await captureHttp(nativeUrl + "/v1/models", { headers });
+      expect(listNative.status, `${name} list`).toBe(200);
+      expect(format(listNative.body), `${name} list native`).toBe(native);
+      // The newer detail route selects by request headers under either policy.
+      for (const url of [legacyUrl, nativeUrl]) {
+        const detail = await captureHttp(`${url}/v1/models/${model}`, { headers });
+        expect(detail.status, `${name} detail`).toBe(200);
+        expect(format(detail.body), `${name} detail`).toBe(native);
+      }
     }
   });
 

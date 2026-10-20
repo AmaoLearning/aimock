@@ -7,7 +7,7 @@ export function parsePolicyEntry(
   value: unknown,
 ):
   | { ok: true; key: "requiredHeaders"; value: "off" | "enforce" }
-  | { ok: true; key: "authErrors"; value: "legacy" | "native" }
+  | { ok: true; key: "authErrors" | "modelCatalog"; value: "legacy" | "native" }
   | { ok: false; reason: string } {
   if (key === "requiredHeaders") {
     const normalized = typeof value === "string" ? value.toLowerCase() : undefined;
@@ -16,7 +16,7 @@ export function parsePolicyEntry(
     }
     return { ok: false, reason: 'expected "off" or "enforce".' };
   }
-  if (key === "authErrors") {
+  if (key === "authErrors" || key === "modelCatalog") {
     const normalized = typeof value === "string" ? value.toLowerCase() : undefined;
     if (normalized === "legacy" || normalized === "native") {
       return { ok: true, key, value: normalized };
@@ -32,7 +32,7 @@ export function assignPolicyEntry(
   entry: Exclude<ReturnType<typeof parsePolicyEntry>, { ok: false }>,
 ): void {
   if (entry.key === "requiredHeaders") target.requiredHeaders = entry.value;
-  else target.authErrors = entry.value;
+  else target[entry.key] = entry.value;
 }
 
 /** Parse each programmatic entry independently without changing the caller's object. */
@@ -88,6 +88,7 @@ export function resolvePolicy(
     strict,
     requiredHeaders: request.requiredHeaders ?? server.requiredHeaders ?? "off",
     authErrors: request.authErrors ?? server.authErrors ?? "legacy",
+    modelCatalog: request.modelCatalog ?? server.modelCatalog ?? "legacy",
   });
 }
 

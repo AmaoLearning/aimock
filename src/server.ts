@@ -4092,8 +4092,13 @@ async function startServer(
     ) {
       setCorsHeaders(res);
       const google = pathname === GEMINI_MODELS_PATH || geminiModelDetailMatch !== null;
-      const anthropic = !google && isAnthropicModelRequest(req.headers);
       const policy = resolvePolicy(defaults, req.headers);
+      // The 1.45 list route stays OpenAI-format unless opted in; the newer detail route
+      // selects its dialect from the request headers.
+      const anthropic =
+        !google &&
+        (modelDetailMatch !== null || policy.modelCatalog === "native") &&
+        isAnthropicModelRequest(req.headers);
       const missingHeader =
         anthropic && policy.requiredHeaders === "enforce"
           ? missingRequiredHeader("messages", req.headers)
