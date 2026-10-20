@@ -16,6 +16,66 @@ AIMock 负责流内容折叠、fixture 和回放。回放未命中明确失败�
 
 ## 安装
 
+### 新公网服务：从共享盘直接启动
+
+共享部署目录为 `/mnt/shared-storage-gpfs3/yicheng-deploy/aimock`，包含：
+
+```text
+start.sh                   前台启动入口
+current -> releases/...    已发布源码
+runtime/node-22.22.0-aimock-1.45.1/
+    bin/node               Linux x86_64 Node 22.22.0
+    node_modules/          固定 AIMock 1.45.1，无需联网安装
+config/upstream.json        已配置的 YICLOUD 上游参数，权限 600
+config/client-key           下游 API key，权限 600
+```
+
+新服务使用与工作机相同的 Linux x86_64 Ubuntu 24.04 基础镜像，需有 Bash、glibc 和 libstdc++。
+初始资源按 16 CPU / 160 GiB、8 workers 配置。以 root 启动，与现有数据和配置的 UID 一致；
+挂载 gpfs3 部署盘和 gpfs2 数据盘到相同绝对路径，并开启到真实模型入口的出站网络。
+共享部署包没有依赖工作机的 `/opt`、`/etc`、系统 Node、nginx 或 systemd。
+
+新服务的启动命令可以完整填写为：
+
+```bash
+exec env \
+  AIMOCK_DEPLOY_ROOT=/mnt/shared-storage-gpfs3/yicheng-deploy/aimock \
+  AIMOCK_HOST=0.0.0.0 \
+  AIMOCK_PORT=4010 \
+  AIMOCK_WORKERS=8 \
+  AIMOCK_DATA_ROOT=/mnt/shared-storage-gpfs2/df4-hicache/aimock-v1 \
+  AIMOCK_UPSTREAM_CONFIG=/mnt/shared-storage-gpfs3/yicheng-deploy/aimock/config/upstream.json \
+  AIMOCK_CLIENT_KEY_FILE=/mnt/shared-storage-gpfs3/yicheng-deploy/aimock/config/client-key \
+  NODE_OPTIONS=--max-old-space-size=4096 \
+  /bin/bash /mnt/shared-storage-gpfs3/yicheng-deploy/aimock/start.sh
+```
+
+默认值相同时，也可简写为 `exec /bin/bash /mnt/shared-storage-gpfs3/yicheng-deploy/aimock/start.sh`。
+平台将 HTTP 公网服务映射到容器 **4010** 端口，健康检查使用 **GET /healthz**。
+直接映射时没有 `/aimock/` 前缀，录制 base URL 为 `https://<公网域名>/record/<session-id>/v1`。
+平台需保留 Authorization 和会话头，允许 SSE，关闭代理缓冲，流式超时建议至少 300 秒。
+
+启动脚本在 fork workers 前检查两块盘确实挂载、配置仅属主可读、数据目录可写及端口未占用；
+缺失挂载会明确失败，不会把录制静默写到容器本地磁盘。日志写 stdout/stderr，主进程接收平台
+SIGTERM 后排空在途请求。平台应给予至少 35 秒停止宽限期；无需 nohup 或后台运行。
+
+共享部署包由工作机上已验证的环境生成，更新源码时运行：
+
+```bash
+python3 deploy/yicloud/prepare-shared.py --release <新的版本标识>
+```
+
+该命令需在现有工作机执行，复用 `/opt/aimock/runtime` 作为打包来源和 `/etc/aimock` 作为初次
+配置来源。它不覆盖已有 release，不删除录制，不替换已有共享配置；发布后新服务启动只读取共享盘。
+每个 release 的 `release-manifest.json` 保存源码及 Node 二进制 SHA-256。原工作机上的
+systemd 服务继续独立运行；新旧入口使用不同 session ID 时可以并行录制到同一数据根目录。
+
+`tests/shared-start-smoke.py` 会从 `/tmp` 工作目录调用共享盘入口，在独立的 14010 端口启动
+两个 worker；验证真实 read 工具录制、严格回放、401 鉴权、缺配置/端口占用拒绝和 SIGTERM
+正常退出，并确认进程可执行文件与 AIMock 模块都来自 gpfs3。该脚本不改动原 4010 服务。
+
+### 现有工作机的 systemd 安装
+
 目标是专用工作机 `yicloud-aimock-cpu`，使用 8 个 worker，不替换系统 Node。
 固定 Node `22.22.0`、AIMock `1.45.1`；验证使用 `@earendil-works/pi-coding-agent@0.81.1`。
 这是部署目录，运行固定发布包，不要求将整个上游构建链安装到工作机。
