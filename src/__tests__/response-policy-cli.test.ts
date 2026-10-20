@@ -88,7 +88,13 @@ async function count(url: string, headers: Record<string, string> = {}) {
   return result;
 }
 
-function cli(binary: string, args: string[] = [], policy?: unknown, emptyFixtures = false) {
+function cli(
+  binary: string,
+  args: string[] = [],
+  policy?: unknown,
+  emptyFixtures = false,
+  extraEnv: Record<string, string> = {},
+) {
   const file = configFile(policy);
   if (emptyFixtures) writeFileSync(join(dir, "fixtures.json"), '{"fixtures":[]}');
   const base = binary.startsWith("aimock")
@@ -98,6 +104,7 @@ function cli(binary: string, args: string[] = [], policy?: unknown, emptyFixture
   let stderr = "";
   const env = { ...process.env };
   delete env.AIMOCK_API_KEYS;
+  Object.assign(env, extraEnv);
   const child = spawn(process.execPath, [join(root, "dist", binary), ...base, ...args], {
     cwd: root,
     env,
@@ -240,12 +247,48 @@ describe.each(binaries)("built %s policy", (binary) => {
     "requiredHeaders=",
     "requiredHeaders",
     "requiredHeaders=enforce=off",
+    "authErrors=strict",
+    "AuthErrors=native",
   ])("rejects invalid CLI entry %s with usage exit 1", async (entry) => {
     const result = await cli(binary, ["--policy", entry]).exit();
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("--policy");
     expect(result.stderr).toContain("key=value");
     expect(result.stdout).not.toContain("server listening");
+  });
+
+  it("keeps the 1.45 inbound-auth body by default and opts into native bodies", async () => {
+    const keys = { AIMOCK_API_KEYS: "accepted" };
+    const legacyUrl = await cli(binary, [], undefined, false, keys).start();
+    const nativeUrl = await cli(
+      binary,
+      ["--policy", "authErrors=native"],
+      undefined,
+      false,
+      keys,
+    ).start();
+    const legacy =
+      '{"error":{"message":"Invalid API key","type":"authentication_error","code":"invalid_api_key"}}';
+    const cases = [
+      {
+        path: "/v1/messages/count_tokens",
+        native:
+          '{"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}',
+      },
+      {
+        path: "/v1beta/models/gemini-test:countTokens",
+        native: '{"error":{"code":401,"message":"Invalid API key","status":"UNAUTHENTICATED"}}',
+      },
+    ];
+    for (const { path, native } of cases) {
+      const init = { method: "POST", headers: { "x-api-key": "bad" }, body: "{}" };
+      const byDefault = await captureHttp(legacyUrl + path, init);
+      expect(byDefault.status).toBe(401);
+      expect(byDefault.body).toBe(legacy);
+      const optedIn = await captureHttp(nativeUrl + path, init);
+      expect(optedIn.status).toBe(401);
+      expect(optedIn.body).toBe(native);
+    }
   });
 
   it("preserves startup with no policy", async () => {

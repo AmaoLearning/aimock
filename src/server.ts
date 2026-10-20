@@ -3746,7 +3746,12 @@ async function startServer(
       (pathname === HEALTH_PATH || pathname === READY_PATH || pathname === METRICS_PATH);
     if (!isPublicProbe) {
       if (!validateRequestApiKey(req, resolvedAuth.policy).ok) {
-        writeApiKeyHttpRejection(res, setCorsHeaders, pathname);
+        writeApiKeyHttpRejection(
+          res,
+          setCorsHeaders,
+          pathname,
+          resolvePolicy(defaults, req.headers).authErrors,
+        );
         return;
       }
       markAuthenticatedRequest(req, resolvedAuth.policy);
