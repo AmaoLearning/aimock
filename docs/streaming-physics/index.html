@@ -161,11 +161,12 @@
         <h2 id="non-streaming">Non-Streaming Responses</h2>
         <p>
           A fixture with <code>streamingProfile</code> or <code>recordedTimings</code> also delays
-          <code>stream: false</code> OpenAI Chat Completions responses, for both text and tool
-          calls. aimock waits for the sum of the per-chunk delays that a streamed reply at the same
-          <code>chunkSize</code> would get (<code>ttft</code>, then a <code>tps</code> gap for each
-          further content chunk), then writes the JSON body. A streamed reply also pays for its role
-          and finish chunks, so the two totals are close but not identical.
+          <code>stream: false</code> OpenAI Chat Completions responses: text, tool calls, combined
+          content and tool calls, and <code>blocks</code> replies. aimock waits for the sum of the
+          per-chunk delays that a streamed reply at the same <code>chunkSize</code> would get
+          (<code>ttft</code>, then a <code>tps</code> gap for each further content chunk), then
+          writes the JSON body. A streamed reply also pays for its role and finish chunks, so the
+          two totals are close but not identical.
         </p>
         <p>
           This applies only to OpenAI Chat Completions. Non-streaming responses from other providers
