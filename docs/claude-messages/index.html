@@ -153,8 +153,9 @@ curl 'http://localhost:4010/v1/models/claude-test' \
         <p>
           <code>POST /v1/messages/count_tokens</code> accepts a Messages-style body and returns
           <code>{"input_tokens": N}</code>. It converts messages, system text, and tools through the
-          existing request translator, then estimates tokens with <code>ceil(chars / 4)</code>. This
-          deterministic estimate is not a tokenizer or an upstream count.
+          existing request translator, then estimates about 1 token per 4 characters of messages
+          (plus tool definitions), minimum 1. This deterministic estimate is not a tokenizer or an
+          upstream count.
         </p>
         <div class="code-block">
           <div class="code-block-header">Count a prompt <span class="lang-tag">shell</span></div>

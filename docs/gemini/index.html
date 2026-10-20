@@ -149,10 +149,11 @@ curl 'http://localhost:4010/v1beta/models/gemini-test'</code></pre>
           including system text and tools.
         </p>
         <p>
-          aimock converts the request through its existing translator, then estimates tokens with
-          <code>ceil(chars / 4)</code>. The estimate includes converted messages, system text, and
-          serialized converted tools. This deterministic estimate is not a tokenizer or an upstream
-          count. Optional cache counts and token-detail arrays are omitted.
+          aimock converts the request through its existing translator, then estimates about 1 token
+          per 4 characters of messages (plus tool definitions), minimum 1. The estimate includes
+          converted messages, system text, and serialized converted tools. This deterministic
+          estimate is not a tokenizer or an upstream count. Optional cache counts and token-detail
+          arrays are omitted.
         </p>
         <div class="code-block">
           <div class="code-block-header">Count a prompt <span class="lang-tag">shell</span></div>
