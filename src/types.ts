@@ -907,6 +907,14 @@ export interface Fixture {
    * this exercises that path. No effect on non-streaming or OpenAI responses.
    */
   openRouterProcessing?: boolean;
+  /**
+   * Opt into `streamingProfile` / `recordedTimings` timing on this fixture's
+   * non-streaming (`stream: false`) OpenAI chat completion replies (default OFF).
+   * When enabled, the single JSON reply waits about as long as the streamed
+   * reply would. Without it, non-streaming replies return immediately. Bare
+   * `latency` never delays non-streaming replies. Other providers ignore it.
+   */
+  nonStreamingTiming?: boolean;
   metadata?: {
     systemHash?: string;
     toolsHash?: string;
@@ -1111,6 +1119,8 @@ export interface FixtureFileEntry {
   chaos?: ChaosConfig;
   /** See {@link Fixture.openRouterProcessing}. */
   openRouterProcessing?: boolean;
+  /** See {@link Fixture.nonStreamingTiming}. */
+  nonStreamingTiming?: boolean;
   metadata?: {
     systemHash?: string;
     toolsHash?: string;
