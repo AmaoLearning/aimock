@@ -24,6 +24,11 @@ export function fitsEvidenceRecord(line: string, taskId = TASK_ID_ALLOWANCE): bo
   return Buffer.byteLength(encoded) <= MAX_EVIDENCE_RECORD_BYTES;
 }
 
+const digest = (value: unknown) => {
+  const bytes = Buffer.from(JSON.stringify(value, bytesAsBase64) ?? "null");
+  return { omitted: true, byteLength: bytes.length, sha256: sha256(bytes) };
+};
+
 /**
  * Serialize one AWS drift diagnostic console line so the evidence reporter can
  * still bind it to its test.
@@ -33,9 +38,11 @@ export function fitsEvidenceRecord(line: string, taskId = TASK_ID_ALLOWANCE): bo
  * assertion makes the collector withhold the whole observation artifact, so
  * the native drift gate cannot grade the run.
  *
- * SDK event bytes are written as base64. If the line is still too large, the
- * raw wire bytes and then the SDK events are replaced by their size and
- * SHA-256. The decoded events and all other fields stay as they are.
+ * SDK event bytes are written as base64. While the line is still too large,
+ * the raw wire bytes, then the SDK events, then the decoded events are
+ * replaced by their size and SHA-256. If it still does not fit, the line keeps
+ * only the cell, the names of the omitted fields, and the size and SHA-256 of
+ * the complete line. Every returned line fits the reporter limit.
  */
 export function boundedDiagnosticLine(
   record: Record<string, unknown> & { sdkEvents: unknown[] },
@@ -43,22 +50,38 @@ export function boundedDiagnosticLine(
 ): string {
   const rawWire = { encoding: "base64", bytes: wire.toString("base64") };
   const wireDigest = { omitted: true, byteLength: wire.length, sha256: sha256(wire) };
-  const full = JSON.stringify({ ...record, rawWire }, bytesAsBase64);
-  if (fitsEvidenceRecord(full)) return full;
-  const withoutWire = JSON.stringify({ ...record, rawWire: wireDigest }, bytesAsBase64);
-  if (fitsEvidenceRecord(withoutWire)) return withoutWire;
-  const events = Buffer.from(JSON.stringify(record.sdkEvents, bytesAsBase64));
-  return JSON.stringify(
-    {
-      ...record,
-      sdkEvents: {
-        omitted: true,
-        count: record.sdkEvents.length,
-        byteLength: events.length,
-        sha256: sha256(events),
-      },
-      rawWire: wireDigest,
-    },
-    bytesAsBase64,
+  const eventsDigest = { count: record.sdkEvents.length, ...digest(record.sdkEvents) };
+  const decodedDigests = Object.fromEntries(
+    (["decoded", "decodedEvents"] as const)
+      .filter((key) => key in record)
+      .map((key) => [key, digest(record[key])]),
   );
+  const full = JSON.stringify({ ...record, rawWire }, bytesAsBase64);
+  const candidates = [
+    () => full,
+    () => ({ ...record, rawWire: wireDigest }),
+    () => ({ ...record, sdkEvents: eventsDigest, rawWire: wireDigest }),
+    () => ({
+      ...record,
+      sdkEvents: eventsDigest,
+      ...decodedDigests,
+      rawWire: wireDigest,
+    }),
+  ];
+  for (const candidate of candidates) {
+    const value = candidate();
+    const line = typeof value === "string" ? value : JSON.stringify(value, bytesAsBase64);
+    if (fitsEvidenceRecord(line)) return line;
+  }
+  const fullBytes = Buffer.from(full);
+  const summary = {
+    omitted: [...Object.keys(record).filter((key) => key !== "cell"), "rawWire"],
+    byteLength: fullBytes.length,
+    sha256: sha256(fullBytes),
+  };
+  const minimal = JSON.stringify({ cell: record.cell, ...summary }, bytesAsBase64);
+  // `cell` is a short fixed tuple; drop it too rather than ever exceed the limit.
+  return fitsEvidenceRecord(minimal)
+    ? minimal
+    : JSON.stringify({ ...summary, omitted: [...summary.omitted, "cell"] });
 }
