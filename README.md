@@ -258,7 +258,9 @@ await createServer(fixtures, { auth: { apiKeys: ["test-key"] } });
 AIMOCK_API_KEYS=test-key,rotated-key npx @copilotkit/aimock --config aimock.json
 ```
 
-Use `Authorization: Bearer <key>`, `Authorization: Key <key>`, `x-api-key`, `x-goog-api-key`, `api-key`, or `xi-api-key`. Every supplied credential must resolve to one configured key; mismatches return `401` with an OpenAI-compatible authentication error. HTTP routes, control APIs, mounts, and WebSocket upgrades are protected. Genuine CORS preflights plus `GET /health`, `GET /ready`, and `GET /metrics` remain public. This is inbound test access control, distinct from `record.providerKeys`; when enabled, proxying strips test credentials and requires a configured static provider credential before egress.
+Use `Authorization: Bearer <key>`, `Authorization: Key <key>`, `x-api-key`, `x-goog-api-key`, `api-key`, or `xi-api-key`. Every supplied credential must resolve to one configured key; mismatches return `401`. HTTP routes, control APIs, mounts, and WebSocket upgrades are protected. Genuine CORS preflights plus `GET /health`, `GET /ready`, and `GET /metrics` remain public. This is inbound test access control, distinct from `record.providerKeys`; when enabled, proxying strips test credentials and requires a configured static provider credential before egress.
+
+**Auth error compatibility:** Anthropic Messages/count now omit the old `error.code: "invalid_api_key"`; check HTTP 401 or `error.type: "authentication_error"`. Gemini/Vertex Google HTTP paths replace that string with numeric `error.code: 401`; check HTTP 401 or `error.status: "UNAUTHENTICATED"`. Shared `/v1/models`, other HTTP paths, and WebSocket rejections keep their existing OpenAI-shaped error bodies. See the [Anthropic](docs/claude-messages/index.html#authentication-errors) and [Gemini](docs/gemini/index.html#authentication-errors) examples before updating client assertions.
 
 ### aimock-owned upstream keys — `AIMOCK_PROVIDER_*_KEY`
 

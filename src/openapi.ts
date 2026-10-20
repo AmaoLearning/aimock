@@ -2508,12 +2508,12 @@ const SCHEMA_REFS: Record<string, OperationSchemas> = {
       },
       {
         name: "after_id",
-        description: "Anthropic cursor after this visible ID",
+        description: "Anthropic cursor after this visible ID; unknown IDs return 400",
         schema: { type: "string" },
       },
       {
         name: "before_id",
-        description: "Anthropic cursor before this visible ID",
+        description: "Anthropic cursor before this visible ID; unknown IDs return 400",
         schema: { type: "string" },
       },
       {

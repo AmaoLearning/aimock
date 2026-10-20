@@ -139,10 +139,10 @@ describe("native model catalogs on the source server", () => {
       ["claude-test-2"],
       true,
     ],
-    ["unknown-after", "after_id=missing", [], false],
-    ["unknown-before", "before_id=missing", [], false],
     ["retired", "lifecycle=retired", [], false],
     ["deprecated", "lifecycle[]=deprecated", [], false],
+    ["retired-known-after", "lifecycle=retired&after_id=claude-test-0", [], false],
+    ["deprecated-known-before", "lifecycle[]=deprecated&before_id=claude-test-3", [], false],
     [
       "union",
       "limit=1&lifecycle=retired&lifecycle[]=active&lifecycle=deprecated&lifecycle[]=active",
@@ -157,6 +157,25 @@ describe("native model catalogs on the source server", () => {
       has_more: hasMore,
       first_id: expectedIds[0] ?? null,
       last_id: expectedIds.at(-1) ?? null,
+    });
+  });
+
+  it.each([
+    "after_id=missing",
+    "before_id=missing",
+    "after_id=missing&before_id=claude-test-3",
+    "after_id=claude-test-0&before_id=missing",
+    "lifecycle=retired&after_id=missing",
+    "lifecycle[]=deprecated&before_id=missing",
+  ])("Anthropic rejects unknown cursor in %s", async (query) => {
+    const { status, body } = await get("anthropic-unknown-cursor:" + query, "/v1/models?" + query);
+    expect(status).toBe(400);
+    expect(body).toEqual({
+      type: "error",
+      error: {
+        type: "invalid_request_error",
+        message: "Model with id missing not found",
+      },
     });
   });
 

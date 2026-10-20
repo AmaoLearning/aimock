@@ -117,12 +117,30 @@ const anthropicCatalogCases = [
   {
     id: "anthropic-after-unknown",
     query: "after_id=aimock-nonexistent-model",
-    expected: { status: 200, body: emptyAnthropicPage },
+    expected: {
+      status: 400,
+      body: {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message: "Model with id aimock-nonexistent-model not found",
+        },
+      },
+    },
   },
   {
     id: "anthropic-before-unknown",
     query: "before_id=aimock-nonexistent-model",
-    expected: { status: 200, body: emptyAnthropicPage },
+    expected: {
+      status: 400,
+      body: {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          message: "Model with id aimock-nonexistent-model not found",
+        },
+      },
+    },
   },
   {
     id: "anthropic-lifecycle-invalid",
@@ -1063,6 +1081,11 @@ describe("recorded /models family waves are classified", () => {
       // bare chat alias (fixture-vs-live gap: present in live /models, was absent
       // from the static wave — this is the 2026-07-18 canary residual)
       "chat-latest",
+      // 2026-10-18 wave (Drift Tests run 39103216353): pre-GA `-alpha` codenames,
+      // listed for one run and 404 (`model_not_found`) since — explicit excludes
+      "aurora-blue-alpha",
+      "aurora-green-alpha",
+      "aurora-red-alpha",
     ];
     expect(unclassifiedFamilies(openaiLive, "openai")).toEqual([]);
   });
@@ -1114,6 +1137,8 @@ describe("recorded /models family waves are classified", () => {
       "gemini-3.5-flash-lite",
       "gemini-3.6-flash",
       "gemini-3.7-flash",
+      // 2026-10-14 wave (run 38523200980): Gemini 4 Argon, probe-verified text chat
+      "gemini-4-argon",
       // Restricted EAP surface — explicit exclude (text-capable, but pre-GA)
       "gemini-3.7-flash-video-understanding-eap",
       // Preview text tiers — auto-excluded by the -preview pattern rule
