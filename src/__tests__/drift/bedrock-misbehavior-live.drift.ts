@@ -20,6 +20,7 @@ import { Readable, Transform } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LLMock } from "../../llmock.js";
 import type { Fixture } from "../../types.js";
+import { boundedDiagnosticLine } from "./bounded-diagnostic.js";
 import { withClaudeFault } from "../helpers/misbehavior-claude-stage3.js";
 
 const cells = [
@@ -419,36 +420,36 @@ async function runAwsCell(
       networkEnded,
       decoded,
     };
+    const { rawWire, ...observed } = observation;
     console.log(
-      JSON.stringify({
-        cell,
-        request: cell.wire === "invoke" ? invokeInput : converseInput,
-        ...observation,
-        rawWire: { encoding: "base64", bytes: observation.rawWire.toString("base64") },
-      }),
+      boundedDiagnosticLine(
+        { cell, request: cell.wire === "invoke" ? invokeInput : converseInput, ...observed },
+        rawWire,
+      ),
     );
     return observation;
   } catch (error) {
     const errorMetadata =
       error instanceof Error && "$metadata" in error ? error.$metadata : undefined;
+    const diagnostic = {
+      cell,
+      request: cell.wire === "invoke" ? invokeInput : converseInput,
+      requestCount,
+      http,
+      metadata: errorMetadata ?? metadata,
+      sdkResponse,
+      sdkEvents,
+      decodedEvents: cell.wire === "invoke" ? events : converseEvents,
+      networkEnded,
+      error: error instanceof Error ? { name: error.name, message: error.message } : String(error),
+    };
     console.log(
-      JSON.stringify({
-        cell,
-        request: cell.wire === "invoke" ? invokeInput : converseInput,
-        requestCount,
-        http,
-        metadata: errorMetadata ?? metadata,
-        sdkResponse,
-        sdkEvents,
-        decodedEvents: cell.wire === "invoke" ? events : converseEvents,
-        networkEnded,
-        rawWire:
-          !live && limits.diagnosticWire === "summary"
-            ? { omitted: true, byteLength: Buffer.concat(chunks).length }
-            : { encoding: "base64", bytes: Buffer.concat(chunks).toString("base64") },
-        error:
-          error instanceof Error ? { name: error.name, message: error.message } : String(error),
-      }),
+      !live && limits.diagnosticWire === "summary"
+        ? JSON.stringify({
+            ...diagnostic,
+            rawWire: { omitted: true, byteLength: Buffer.concat(chunks).length },
+          })
+        : boundedDiagnosticLine(diagnostic, Buffer.concat(chunks)),
     );
     throw failure ?? error;
   } finally {
