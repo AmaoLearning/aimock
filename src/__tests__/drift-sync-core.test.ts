@@ -24,7 +24,7 @@ import { join } from "node:path";
 import ts from "typescript";
 
 import { includeFamilies, excludeFamilies, deprecatedFamilies } from "./drift/model-registry.js";
-import { isVoiceModelId, knownVoiceModelFamilies } from "./drift/voice-models.js";
+import { isKnownVoiceModelFamily, isVoiceModelId } from "./drift/voice-models.js";
 import { MIN_LISTING_SIZE, FORWARD_LOOKING_FAMILIES } from "./drift/deprecation-detector.js";
 import {
   detectDeprecatedFamiliesForSync,
@@ -965,9 +965,9 @@ describe("runDriftSyncCore", () => {
 
   // THE VOICE HALF-CLASSIFICATION. `excludeFamilies` and
   // `knownVoiceModelFamilies` are deliberately disjoint surfaces and the sync
-  // writes only the first, so auto-applying a voice family's decision leaves
-  // ws-realtime.drift.ts reporting UNKNOWN_REALTIME_MODELS at critical severity:
-  // gate-3 refuses, both files revert, the note still says `Decision: exclude`,
+  // writes only the first, so auto-applying an OpenAI voice family's decision
+  // leaves ws-realtime.drift.ts reporting UNKNOWN_REALTIME_MODELS at critical
+  // severity: gate-3 refuses, both files revert, the note still says `Decision: exclude`,
   // and the identical apply/fail/revert/alert repeats every night forever.
   it("a DECIDED voice family is routed to a human instead of being half-applied", () => {
     for (const verdict of ["include", "exclude"] as const) {
@@ -996,25 +996,25 @@ describe("runDriftSyncCore", () => {
     // The predicate keys on the voice SEED SET, not on the id's shape. Every
     // seeded family is already classified in the registry, so the case is
     // constructed the way it arises in life: the human made the voice-models.ts
-    // half of the two-edit commit, and the registry half is what is left.
-    knownVoiceModelFamilies.add("gpt-live");
-    try {
-      expect(isVoiceModelId("gpt-live")).toBe(true);
-      expect(needsVoiceSeedSetEdit("gpt-live", "openai")).toBe(false);
+    // half of the two-edit commit, and the registry half is what is left. The
+    // seed set is private to voice-models.ts, so that half is modelled through
+    // the `isKnownVoiceFamily` seam (the same shape as `isRecorded`).
+    const seedSetWithGptLive = (family: string): boolean =>
+      family === "gpt-live" || isKnownVoiceModelFamily(family);
+    expect(isVoiceModelId("gpt-live")).toBe(true);
+    expect(isKnownVoiceModelFamily("gpt-live")).toBe(false);
+    expect(needsVoiceSeedSetEdit("gpt-live", "openai", seedSetWithGptLive)).toBe(false);
 
-      const { deps, registry } = makeFakeDeps();
-      notes_set(deps, proposalNoteRelPath("openai", "gpt-live", "new-family"), "exclude");
-      const outcome = runDriftSyncCore([{ provider: "openai", liveModelIds: ["gpt-live"] }], deps);
+    const { deps, registry } = makeFakeDeps({ isKnownVoiceFamily: seedSetWithGptLive });
+    notes_set(deps, proposalNoteRelPath("openai", "gpt-live", "new-family"), "exclude");
+    const outcome = runDriftSyncCore([{ provider: "openai", liveModelIds: ["gpt-live"] }], deps);
 
-      expect(outcome.reason).toBe(SyncCoreReason.OK_APPLIED);
-      expect(outcome.outcomes).toEqual([
-        expect.objectContaining({ family: "gpt-live", action: "excluded" }),
-      ]);
-      const excludeSection = registry.text.slice(registry.text.indexOf("excludeFamilies"));
-      expect(excludeSection).toContain('"gpt-live"');
-    } finally {
-      knownVoiceModelFamilies.delete("gpt-live");
-    }
+    expect(outcome.reason).toBe(SyncCoreReason.OK_APPLIED);
+    expect(outcome.outcomes).toEqual([
+      expect.objectContaining({ family: "gpt-live", action: "excluded" }),
+    ]);
+    const excludeSection = registry.text.slice(registry.text.indexOf("excludeFamilies"));
+    expect(excludeSection).toContain('"gpt-live"');
   });
 
   // The voice seed set is read by ONE canary: ws-realtime.drift.ts, against the
@@ -1595,8 +1595,8 @@ describe("buildSyncCommitMessage", () => {
 
 /**
  * Set a note's Decision line to a human verdict. The body is the REAL
- * renderProposalNote output for `subject` (default openai/gpt-zeta), so a
- * provider-scoped test reads the note that provider's run would actually write.
+ * renderProposalNote output for `subject` (default openai/gpt-zeta), not
+ * necessarily for the note at `notePath`.
  */
 function notes_set(
   deps: SyncCoreDeps,

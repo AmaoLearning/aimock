@@ -54,11 +54,7 @@ import {
   isFamilyStillReferenced,
   isForwardLookingFamily,
 } from "../src/__tests__/drift/deprecation-detector.js";
-import {
-  isVoiceModelId,
-  knownVoiceModelFamilies,
-  normalizeVoiceModelFamily,
-} from "../src/__tests__/drift/voice-models.js";
+import { isKnownVoiceModelFamily, isVoiceModelId } from "../src/__tests__/drift/voice-models.js";
 import {
   InfraError,
   isInfraSkip,
@@ -498,12 +494,14 @@ export type ProposalKind =
   | "new-family"
   | "registry-structural-mismatch"
   /**
-   * A human's `Decision:` on a VOICE/AUDIO family. `excludeFamilies` and
-   * `knownVoiceModelFamilies` are deliberately disjoint surfaces (see
-   * `voice-models.ts`), and the sync writes only the first — so applying a
-   * voice family's classification alone leaves the realtime canary red, the
-   * gate refuses the run, both files revert, and the identical note re-fires
-   * the same apply/fail/revert every night forever. Routed to a human instead.
+   * A human's `Decision:` on an OpenAI VOICE/AUDIO family (only
+   * {@link VOICE_SEED_SET_PROVIDER} — see {@link needsVoiceSeedSetEdit}).
+   * `excludeFamilies` and `knownVoiceModelFamilies` are deliberately disjoint
+   * surfaces (see `voice-models.ts`), and the sync writes only the first — so
+   * applying such a family's classification alone leaves the realtime canary
+   * red, the gate refuses the run, both files revert, and the identical note
+   * re-fires the same apply/fail/revert every night forever. Routed to a human
+   * instead. A voice-shaped family from any other provider never gets this note.
    */
   | "voice-seed-set"
   /**
@@ -516,9 +514,9 @@ export type ProposalKind =
 export type ProposalDecision = "pending" | "include" | "exclude";
 
 /**
- * The one provider whose voice/audio families the realtime canary watches.
- * ws-realtime.drift.ts runs `detectVoiceModelDrift` (and so reads
- * `knownVoiceModelFamilies`) against `listOpenAIModels` only.
+ * The one provider whose voice/audio families the realtime canary watches:
+ * ws-realtime.drift.ts calls `detectOpenAIVoiceModelDrift` in voice-models.ts,
+ * which reads only the OpenAI listing.
  */
 export const VOICE_SEED_SET_PROVIDER: Provider = "openai";
 
@@ -843,6 +841,14 @@ export interface SyncCoreDeps {
    * seeing the first run's record.
    */
   isRecorded?: (family: string, provider: Provider) => boolean;
+  /**
+   * "Is this family already in the realtime canary's voice seed set?" Defaults
+   * to `isKnownVoiceModelFamily` from voice-models.ts. Injectable for the same
+   * reason as `isRecorded`: the seed set is module-private and immutable from
+   * outside, so a test cannot otherwise build the "seed-set half already made"
+   * case.
+   */
+  isKnownVoiceFamily?: (family: string) => boolean;
   readRegistrySource: () => string;
   writeRegistrySource: (text: string) => void;
   /**
@@ -875,15 +881,16 @@ export interface SyncCoreDeps {
 
 /**
  * Would classifying `family` in the registry alone leave the REALTIME CANARY
- * red?
+ * red? Only ever true on {@link VOICE_SEED_SET_PROVIDER} (OpenAI) — see the
+ * last paragraph.
  *
- * `ws-realtime.drift.ts` asserts `detectVoiceModelDrift(liveIds).unknown === []`
- * at CRITICAL severity, and that computation reads `knownVoiceModelFamilies` in
- * `voice-models.ts` — a set that is deliberately DISJOINT from
- * `includeFamilies`/`excludeFamilies` and that drift-sync does not write. So for
- * a family this returns true for, an auto-applied classification is a guaranteed
- * gate-3 failure: apply, revert, alert — with the note still saying `Decision:
- * exclude`, so the identical run repeats every night forever. The precedent the
+ * `ws-realtime.drift.ts` asserts that `detectOpenAIVoiceModelDrift` in
+ * `voice-models.ts` reports no unknown voice families, at CRITICAL severity.
+ * That check reads the voice seed set, which is deliberately DISJOINT from
+ * `includeFamilies`/`excludeFamilies` and which drift-sync does not write. So for
+ * a family this returns true for, an auto-applied classification fails gate-3 on
+ * any run where gate-3 runs: apply, revert, alert — with the note still saying
+ * `Decision: exclude`, so the identical run repeats every night forever. The precedent the
  * exclude affordance was modelled on (936b59c, gpt-transcribe /
  * gpt-live-transcribe) needed BOTH edits by hand and says so.
  *
@@ -895,17 +902,18 @@ export interface SyncCoreDeps {
  * quiet for it, so the registry edit is the only one outstanding.
  *
  * Scoped to {@link VOICE_SEED_SET_PROVIDER}: the realtime canary reads ONLY the
- * OpenAI `/models` listing (`listOpenAIModels` in ws-realtime.drift.ts), so a
- * voice-shaped id from another provider (e.g. `gemini-3.8-flash-tts`, which
- * `isVoiceModelId` matches on `-tts`) can never turn it red. For such a family
- * the registry edit is the whole job, and drift-sync applies it.
+ * OpenAI `/models` listing (via `detectOpenAIVoiceModelDrift`), so a
+ * voice-shaped id from another provider (e.g. `gemini-x-tts`, which
+ * `isVoiceModelId` matches on `-tts`) can never turn it red. For such a
+ * family no voice seed-set edit is needed, and drift-sync applies the registry
+ * edit (other live canaries may still report their own, unrelated drift).
  */
-export function needsVoiceSeedSetEdit(family: string, provider: Provider): boolean {
-  return (
-    provider === VOICE_SEED_SET_PROVIDER &&
-    isVoiceModelId(family) &&
-    !knownVoiceModelFamilies.has(normalizeVoiceModelFamily(family))
-  );
+export function needsVoiceSeedSetEdit(
+  family: string,
+  provider: Provider,
+  isKnown: (family: string) => boolean = isKnownVoiceModelFamily,
+): boolean {
+  return provider === VOICE_SEED_SET_PROVIDER && isVoiceModelId(family) && !isKnown(family);
 }
 
 export type FamilyAction =
@@ -1154,13 +1162,14 @@ export function runDriftSyncCore(
       const decision = existing !== null ? parseProposalDecision(existing) : "pending";
       if (
         (decision === "include" || decision === "exclude") &&
-        needsVoiceSeedSetEdit(family, input.provider)
+        needsVoiceSeedSetEdit(family, input.provider, deps.isKnownVoiceFamily)
       ) {
-        // A DECIDED voice/audio family still needs a second, hand-written edit
-        // to the disjoint voice seed set. Applying half of it is worse than
-        // applying none: the run gate-fails on the still-red realtime canary and
-        // reverts, so the tree ends up identical either way — but the half-apply
-        // spends a nightly alert saying the mechanical edit was wrong. Route it.
+        // A DECIDED OpenAI voice/audio family (see needsVoiceSeedSetEdit) still
+        // needs a second, hand-written edit to the disjoint voice seed set.
+        // Applying half of it is worse than applying none: the run gate-fails on
+        // the still-red realtime canary and reverts, so the tree ends up
+        // identical either way — but the half-apply spends a nightly alert
+        // saying the mechanical edit was wrong. Route it.
         const vsPath = proposalNoteRelPath(input.provider, family, "voice-seed-set");
         ensureProposalNote(
           deps,
