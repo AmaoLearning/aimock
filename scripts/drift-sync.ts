@@ -515,6 +515,13 @@ export type ProposalKind =
   | "pin-repin-failure";
 export type ProposalDecision = "pending" | "include" | "exclude";
 
+/**
+ * The one provider whose voice/audio families the realtime canary watches.
+ * ws-realtime.drift.ts runs `detectVoiceModelDrift` (and so reads
+ * `knownVoiceModelFamilies`) against `listOpenAIModels` only.
+ */
+export const VOICE_SEED_SET_PROVIDER: Provider = "openai";
+
 /** Family-keyed dedup path — re-firing the same alert always resolves to the SAME path. */
 export function proposalNoteRelPath(
   provider: Provider,
@@ -580,20 +587,28 @@ export function renderProposalNote(
       "     The NEXT drift-sync run then applies the mechanical registry edit to",
       "     includeFamilies or excludeFamilies respectively, and re-pins that",
       "     set's membership checksum in the same commit (still zero-LLM: this",
-      "     is a human-authored decision, not generated code).",
-      "",
-      "     ONE EXCEPTION, and it is the common one for `exclude`: a VOICE/AUDIO",
-      "     family (realtime / audio / live / transcribe / whisper / voice / tts)",
-      "     is watched by a SECOND canary whose seed set — knownVoiceModelFamilies",
-      "     in src/__tests__/drift/voice-models.ts — is a deliberately disjoint",
-      "     surface drift-sync does not write. Classifying such a family in the",
-      "     registry alone leaves that canary red, so the run would gate-fail and",
-      "     revert, nightly, forever. drift-sync therefore does NOT auto-apply it:",
-      "     it drops a `-voice-seed-set.md` note and a human makes both edits in",
-      "     one reviewed commit. -->",
-      "Decision: pending",
-      "",
+      provider === VOICE_SEED_SET_PROVIDER
+        ? "     is a human-authored decision, not generated code)."
+        : "     is a human-authored decision, not generated code). -->",
     );
+    // The voice seed-set exception applies only where its canary looks: see
+    // needsVoiceSeedSetEdit. On any other provider's note it would demand an
+    // edit no gate needs.
+    if (provider === VOICE_SEED_SET_PROVIDER) {
+      lines.push(
+        "",
+        "     ONE EXCEPTION, and it is the common one for `exclude`: a VOICE/AUDIO",
+        "     family (realtime / audio / live / transcribe / whisper / voice / tts)",
+        "     is watched by a SECOND canary whose seed set — knownVoiceModelFamilies",
+        "     in src/__tests__/drift/voice-models.ts — is a deliberately disjoint",
+        "     surface drift-sync does not write. Classifying such a family in the",
+        "     registry alone leaves that canary red, so the run would gate-fail and",
+        "     revert, nightly, forever. drift-sync therefore does NOT auto-apply it:",
+        "     it drops a `-voice-seed-set.md` note and a human makes both edits in",
+        "     one reviewed commit. -->",
+      );
+    }
+    lines.push("Decision: pending", "");
   }
   return lines.join("\n");
 }
@@ -878,9 +893,19 @@ export interface SyncCoreDeps {
  *
  * A voice-shaped family ALREADY in the seed set is not affected — the canary is
  * quiet for it, so the registry edit is the only one outstanding.
+ *
+ * Scoped to {@link VOICE_SEED_SET_PROVIDER}: the realtime canary reads ONLY the
+ * OpenAI `/models` listing (`listOpenAIModels` in ws-realtime.drift.ts), so a
+ * voice-shaped id from another provider (e.g. `gemini-3.8-flash-tts`, which
+ * `isVoiceModelId` matches on `-tts`) can never turn it red. For such a family
+ * the registry edit is the whole job, and drift-sync applies it.
  */
-export function needsVoiceSeedSetEdit(family: string): boolean {
-  return isVoiceModelId(family) && !knownVoiceModelFamilies.has(normalizeVoiceModelFamily(family));
+export function needsVoiceSeedSetEdit(family: string, provider: Provider): boolean {
+  return (
+    provider === VOICE_SEED_SET_PROVIDER &&
+    isVoiceModelId(family) &&
+    !knownVoiceModelFamilies.has(normalizeVoiceModelFamily(family))
+  );
 }
 
 export type FamilyAction =
@@ -1127,7 +1152,10 @@ export function runDriftSyncCore(
         touchedFiles,
       );
       const decision = existing !== null ? parseProposalDecision(existing) : "pending";
-      if ((decision === "include" || decision === "exclude") && needsVoiceSeedSetEdit(family)) {
+      if (
+        (decision === "include" || decision === "exclude") &&
+        needsVoiceSeedSetEdit(family, input.provider)
+      ) {
         // A DECIDED voice/audio family still needs a second, hand-written edit
         // to the disjoint voice seed set. Applying half of it is worse than
         // applying none: the run gate-fails on the still-red realtime canary and
