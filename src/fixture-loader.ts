@@ -146,6 +146,9 @@ export function entryToFixture(
       userMessage: entry.match.userMessage,
       systemMessage: entry.match.systemMessage,
       inputText: entry.match.inputText,
+      ...(entry.match.embeddingRequest !== undefined && {
+        embeddingRequest: entry.match.embeddingRequest,
+      }),
       toolCallId: entry.match.toolCallId,
       toolResultContains: entry.match.toolResultContains,
       toolName: entry.match.toolName,
@@ -1663,7 +1666,7 @@ export function validateFixtures(
     // include EVERY match discriminator the router (matchFixtureDiagnostic in
     // router.ts) actually gates on: userMessage, systemMessage, inputText,
     // toolCallId, toolResultContains, toolName, model, responseFormat, endpoint,
-    // context, sequenceIndex, turnIndex, and hasToolResult. Omitting any of these
+    // context, embeddingRequest, sequenceIndex, turnIndex, and hasToolResult. Omitting any of these
     // (the old key only carried turnIndex/hasToolResult/toolResultContains/
     // sequenceIndex/context) flags two legitimately-distinct fixtures — e.g. two
     // that differ ONLY in toolCallId or model — as false duplicates.
@@ -1699,6 +1702,7 @@ export function validateFixtures(
               m.hasToolResult,
               // Appended only when set, so every key without it is unchanged.
               ...(m.toolNamespace !== undefined ? [`toolNamespace=${m.toolNamespace}`] : []),
+              ...(m.embeddingRequest !== undefined ? [JSON.stringify(m.embeddingRequest)] : []),
             ]
               .map((v) => (v === undefined ? "" : String(v)))
               .join("|");
@@ -1728,6 +1732,7 @@ export function validateFixtures(
       match.userMessage !== undefined ||
       match.systemMessage !== undefined ||
       match.inputText !== undefined ||
+      match.embeddingRequest !== undefined ||
       match.responseFormat !== undefined ||
       match.toolCallId !== undefined ||
       match.toolResultContains !== undefined ||

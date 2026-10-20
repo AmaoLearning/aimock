@@ -71,7 +71,8 @@ describe("A4 compiler-bound source ownership", () => {
         );
     }
     expect(calls("./response/errors.js", "renderError")).toHaveLength(
-      name === "bedrock-converse.ts" ? 16 : name === "cohere.ts" ? 18 : 25,
+      // Ollama adds a current-endpoint dimensions error through the shared owner.
+      name === "bedrock-converse.ts" ? 16 : name === "cohere.ts" ? 18 : 26,
     );
     const writes = nodes
       .filter(ts.isCallExpression)

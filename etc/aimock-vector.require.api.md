@@ -225,6 +225,11 @@ type FixtureBlock = {
 interface FixtureMatch {
     // (undocumented)
     context?: string;
+    embeddingRequest?: {
+        operation: "/api/embed" | "/api/embeddings" | "/v1/embeddings";
+        input: unknown;
+        dimensions?: unknown;
+    };
     // (undocumented)
     endpoint?: "chat" | "image" | "speech" | "transcription" | "translation" | "video" | "embedding" | "audio-gen" | "elevenlabs-tts" | "elevenlabs-voice-design" | "elevenlabs-voice" | "elevenlabs-voice-get" | "elevenlabs-voice-delete" | "fal-audio" | "fal" | "realtime" | "realtime-transcription" | "realtime-translation" | "openai-live";
     hasToolResult?: boolean;
