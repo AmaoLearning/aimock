@@ -340,8 +340,15 @@ const instance = await createServer([], {
           <li><code>message_delta</code> &mdash; stop_reason, usage</li>
           <li><code>message_stop</code></li>
         </ol>
+        <p>
+          If the client disconnects mid-stream, aimock stops sending events and skips any remaining
+          per-chunk latency. The journal entry records <code>response.interrupted: true</code> and
+          <code>response.interruptReason: "client aborted"</code>. Fixture interruptions
+          (<code>truncateAfterChunks</code>, <code>disconnectAfterMs</code>) keep their own reasons.
+          See <a href="/error-injection">Error Injection</a>.
+        </p>
 
-        <h2>Cache Usage</h2>
+        <h2 id="cache-usage">Cache Usage</h2>
         <p>
           Set <code>response.usage.cache_read_input_tokens</code> and
           <code>cache_creation_input_tokens</code> in a fixture to emit cache counts on Messages and
