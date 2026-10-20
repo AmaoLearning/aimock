@@ -33,7 +33,7 @@
 
 - MCP `resources/read`: a resource whose content has neither `text` nor `blob` (including one added without content) now reads as `"text": ""` (#533)
 - MCP `resources/read`: the read uses the resource definition's `mimeType` when its content has none (#533)
-- OpenAI chat-completions, non-streaming (`stream: false`): a fixture's `streamingProfile` (`ttft`/`tps`/`jitter`) and `recordedTimings` are now honored — previously only the SSE path applied them, so a non-streaming response returned immediately regardless of the configured timing (#545)
+- OpenAI chat completions only, non-streaming (`stream: false`): opt-in timing. A fixture with an explicit `streamingProfile` (`ttft`/`tps`/`jitter`) or `recordedTimings` now delays the JSON response by about the total its streamed content chunks would take. Before, only the SSE path used these values. Fixtures without them are not delayed: bare `latency` and the global `--latency` stay inter-SSE-chunk gaps and do not slow down non-streaming responses. Other providers are unchanged (#545)
 
 ## [1.45.1] - 2026-10-11
 
