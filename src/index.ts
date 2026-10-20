@@ -252,13 +252,7 @@ export { createInterruptionSignal } from "./interruption.js";
 export type { InterruptionControl } from "./interruption.js";
 
 // SSE
-export {
-  writeSSEStream,
-  writeErrorResponse,
-  delay,
-  calculateDelay,
-  calculateTotalDelay,
-} from "./sse-writer.js";
+export { writeSSEStream, writeErrorResponse, delay, calculateDelay } from "./sse-writer.js";
 export type { StreamOptions, ErrorResponseOptions } from "./sse-writer.js";
 
 // Chaos

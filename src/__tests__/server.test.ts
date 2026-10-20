@@ -561,6 +561,59 @@ describe("POST /v1/chat/completions (non-streaming)", () => {
     // return in a few ms, well under this floor.
     expect(elapsed).toBeGreaterThanOrEqual(50);
   });
+
+  it("applies streamingProfile timing to a non-streaming tool-call response too", async () => {
+    const fixture: Fixture = {
+      match: { userMessage: "slow-non-streaming-tool" },
+      response: { toolCalls: [{ name: "get_weather", arguments: '{"city":"NYC"}' }] },
+      streamingProfile: { ttft: 60, tps: 1000 },
+    };
+    instance = await createServer([fixture]);
+
+    const started = Date.now();
+    const res = await post(`${instance.url}/v1/chat/completions`, {
+      model: "gpt-4",
+      messages: [{ role: "user", content: "slow-non-streaming-tool" }],
+      stream: false,
+    });
+    const elapsed = Date.now() - started;
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body).choices[0].finish_reason).toBe("tool_calls");
+    expect(elapsed).toBeGreaterThanOrEqual(50);
+  });
+
+  it("does not delay a non-streaming response for bare latency (no streamingProfile)", async () => {
+    // `latency` / `--latency` is the gap between SSE chunks. It is not a
+    // non-streaming delay: only an explicit streamingProfile opts in.
+    const fixtures: Fixture[] = [
+      { match: { userMessage: "bare-latency-text" }, response: { content: "x".repeat(200) } },
+      {
+        match: { userMessage: "bare-latency-fixture" },
+        response: { content: "x".repeat(200) },
+        latency: 200,
+      },
+      {
+        match: { userMessage: "bare-latency-tool" },
+        response: { toolCalls: [{ name: "get_weather", arguments: '{"city":"NYC"}' }] },
+      },
+    ];
+    instance = await createServer(fixtures, { latency: 200 });
+
+    for (const content of ["bare-latency-text", "bare-latency-fixture", "bare-latency-tool"]) {
+      const started = Date.now();
+      const res = await post(`${instance.url}/v1/chat/completions`, {
+        model: "gpt-4",
+        messages: [{ role: "user", content }],
+        stream: false,
+      });
+      const elapsed = Date.now() - started;
+
+      expect(res.status).toBe(200);
+      // One latency gap alone is 200ms; a regression would wait at least that.
+      expect(elapsed).toBeLessThan(150);
+    }
+  });
 });
 
 describe("routing", () => {

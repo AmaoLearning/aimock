@@ -332,19 +332,12 @@ describe("fixture loader streamingProfile passthrough", () => {
 });
 
 // ─── calculateTotalDelay unit tests ──────────────────────────────────────────
-// The non-streaming equivalent of calculateDelay: sums it over the same chunk
-// count a streamed response at the same chunkSize would use, so a fixture's
-// timing is identical whether served streamed or not.
+// The non-streaming total: sums calculateDelay over the content chunk count a
+// streamed response at the same chunkSize would use. It takes no fallback
+// latency, so bare `latency` never delays a non-streaming response.
 
 describe("calculateTotalDelay", () => {
-  it("returns fallback latency once, not per would-be chunk, when no profile is set", () => {
-    // 25 chars at chunkSize 10 -> 3 chunks, but a flat fallback applies per
-    // chunk the same way streaming's calculateDelay does, so the total is
-    // fallback * chunkCount here too.
-    expect(calculateTotalDelay(25, 10, undefined, 50)).toBe(150);
-  });
-
-  it("returns 0 when there is no profile and no fallback", () => {
+  it("returns 0 when there is no profile and no recorded timings", () => {
     expect(calculateTotalDelay(25, 10, undefined, undefined)).toBe(0);
   });
 
@@ -383,13 +376,13 @@ describe("calculateTotalDelay", () => {
       totalDurationMs: 120,
     };
     // 30 chars at chunkSize 10 -> 3 chunks: ttft (80) + recorded gaps (15, 25)
-    expect(calculateTotalDelay(30, 10, undefined, undefined, recordedTimings)).toBe(120);
+    expect(calculateTotalDelay(30, 10, undefined, recordedTimings)).toBe(120);
   });
 
   it("divides by replaySpeed, same as calculateDelay", () => {
     const profile: StreamingProfile = { ttft: 200, tps: 50 };
     // 25 chars at chunkSize 10 -> 240ms at 1x (see earlier test), 120ms at 2x
-    expect(calculateTotalDelay(25, 10, profile, undefined, undefined, 2)).toBe(120);
+    expect(calculateTotalDelay(25, 10, profile, undefined, 2)).toBe(120);
   });
 
   it("stays non-negative when jitter or replaySpeed could otherwise push it below zero", () => {

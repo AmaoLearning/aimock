@@ -2415,17 +2415,35 @@ async function handleCompletions(
   ): { prompt_tokens: number; completion_tokens: number; total_tokens: number } =>
     appliedUsage ?? resolveUsage(overrides, streamingPromptText, completionText);
 
-  const resolveRecordedTimings = (chunks: SSEChunk[]) => {
+  const resolveRecordedTimings = (chunkCount: number) => {
     const timings = fixture.recordedTimings;
     if (!appliedPlan?.duplicateId || !timings) return timings;
     const gaps = timings.interChunkDelaysMs;
     return {
       ...timings,
       interChunkDelaysMs: Array.from(
-        { length: Math.max(gaps.length, chunks.length - 1) },
+        { length: Math.max(gaps.length, chunkCount - 1) },
         (_, index) => gaps[index] ?? gaps.at(-1) ?? 0,
       ),
     };
+  };
+
+  // Non-streaming (`stream: false`) timing is opt-in: only an explicit fixture
+  // `streamingProfile` or `recordedTimings` delays the single JSON write, by the
+  // total a streamed reply at the same chunkSize would take. Bare `latency` /
+  // `--latency` is the gap between SSE chunks only and never delays this path.
+  const awaitNonStreamingTiming = (contentLength: number): Promise<void> => {
+    if (!fixture.streamingProfile && !fixture.recordedTimings) return Promise.resolve();
+    const chunkCount = Math.max(1, Math.ceil(contentLength / chunkSize));
+    return delay(
+      calculateTotalDelay(
+        contentLength,
+        chunkSize,
+        fixture.streamingProfile,
+        resolveRecordedTimings(chunkCount),
+        fixture.replaySpeed ?? defaults.replaySpeed,
+      ),
+    );
   };
 
   // OpenRouter response shaping (no-op for OpenAI callers). Applied as a
@@ -2553,16 +2571,7 @@ async function handleCompletions(
           : appliedPlan.stop === "content_filter"
             ? ""
             : (appliedPlan.reasoning ?? "");
-      await delay(
-        calculateTotalDelay(
-          nonStreamedContent.length,
-          chunkSize,
-          fixture.streamingProfile,
-          latency,
-          fixture.recordedTimings,
-          fixture.replaySpeed ?? defaults.replaySpeed,
-        ),
-      );
+      await awaitNonStreamingTiming(nonStreamedContent.length);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(shapeORCompletion(completion, overrides)));
     } else {
@@ -2595,7 +2604,7 @@ async function handleCompletions(
         signal: interruption?.signal,
         onChunkSent: interruption?.tick,
         usageChunk,
-        recordedTimings: resolveRecordedTimings(chunks),
+        recordedTimings: resolveRecordedTimings(chunks.length),
         replaySpeed: fixture.replaySpeed ?? defaults.replaySpeed,
         openRouterProcessing,
       });
@@ -2697,7 +2706,7 @@ async function handleCompletions(
         signal: interruption?.signal,
         onChunkSent: interruption?.tick,
         usageChunk,
-        recordedTimings: resolveRecordedTimings(chunks),
+        recordedTimings: resolveRecordedTimings(chunks.length),
         replaySpeed: fixture.replaySpeed ?? defaults.replaySpeed,
         openRouterProcessing,
       });
@@ -2740,16 +2749,7 @@ async function handleCompletions(
     });
     recordOutcome(journalEntry);
     if (body.stream !== true) {
-      await delay(
-        calculateTotalDelay(
-          (effReasoning?.length ?? 0) + response.content.length,
-          chunkSize,
-          fixture.streamingProfile,
-          latency,
-          fixture.recordedTimings,
-          fixture.replaySpeed ?? defaults.replaySpeed,
-        ),
-      );
+      await awaitNonStreamingTiming((effReasoning?.length ?? 0) + response.content.length);
       const completion = buildTextCompletion(
         response.content,
         responseModel,
@@ -2784,7 +2784,7 @@ async function handleCompletions(
         signal: interruption?.signal,
         onChunkSent: interruption?.tick,
         usageChunk,
-        recordedTimings: resolveRecordedTimings(chunks),
+        recordedTimings: resolveRecordedTimings(chunks.length),
         replaySpeed: fixture.replaySpeed ?? defaults.replaySpeed,
         openRouterProcessing,
       });
@@ -2829,16 +2829,7 @@ async function handleCompletions(
     const toolCalls = requireServedFunctionToolCalls(response, wire);
     if (body.stream !== true) {
       const toolCallText = toolCalls.map((tc) => tc.name + tc.arguments).join("");
-      await delay(
-        calculateTotalDelay(
-          (effReasoning?.length ?? 0) + toolCallText.length,
-          chunkSize,
-          fixture.streamingProfile,
-          latency,
-          fixture.recordedTimings,
-          fixture.replaySpeed ?? defaults.replaySpeed,
-        ),
-      );
+      await awaitNonStreamingTiming((effReasoning?.length ?? 0) + toolCallText.length);
       const completion = buildToolCallCompletion(
         toolCalls,
         responseModel,
@@ -2874,7 +2865,7 @@ async function handleCompletions(
         signal: interruption?.signal,
         onChunkSent: interruption?.tick,
         usageChunk,
-        recordedTimings: resolveRecordedTimings(chunks),
+        recordedTimings: resolveRecordedTimings(chunks.length),
         replaySpeed: fixture.replaySpeed ?? defaults.replaySpeed,
         openRouterProcessing,
       });
