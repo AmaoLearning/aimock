@@ -1840,7 +1840,7 @@ export async function handleMessages(
         if (!completed) {
           if (!res.writableEnded) res.destroy();
           entry.response.interrupted = true;
-          entry.response.interruptReason = interruption?.reason() ?? "client closed";
+          entry.response.interruptReason = interruption?.reason() ?? "client aborted";
         }
       } finally {
         interruption?.cleanup();
@@ -1951,7 +1951,7 @@ export async function handleMessages(
       if (!completed) {
         if (!res.writableEnded) res.destroy();
         journalEntry.response.interrupted = true;
-        journalEntry.response.interruptReason = interruption?.reason() ?? "client closed";
+        journalEntry.response.interruptReason = interruption?.reason() ?? "client aborted";
       }
       interruption?.cleanup();
     }
@@ -2030,7 +2030,7 @@ export async function handleMessages(
       if (!completed) {
         if (!res.writableEnded) res.destroy();
         journalEntry.response.interrupted = true;
-        journalEntry.response.interruptReason = interruption?.reason() ?? "client closed";
+        journalEntry.response.interruptReason = interruption?.reason() ?? "client aborted";
       }
       interruption?.cleanup();
     }
@@ -2112,7 +2112,7 @@ export async function handleMessages(
       if (!completed) {
         if (!res.writableEnded) res.destroy();
         journalEntry.response.interrupted = true;
-        journalEntry.response.interruptReason = interruption?.reason() ?? "client closed";
+        journalEntry.response.interruptReason = interruption?.reason() ?? "client aborted";
       }
       interruption?.cleanup();
     }

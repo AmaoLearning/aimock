@@ -44,7 +44,7 @@ it("journals a real client socket abort promptly during a replay delay", async (
   await expect
     .poll(() => server.getRequests()[0]?.response.interrupted, { timeout: 1000 })
     .toBe(true);
-  expect(server.getRequests()[0].response.interruptReason).toBe("client closed");
+  expect(server.getRequests()[0].response.interruptReason).toBe("client aborted");
   expect(server.getRequests()[0].response.status).toBe(200);
 }, 10000);
 
