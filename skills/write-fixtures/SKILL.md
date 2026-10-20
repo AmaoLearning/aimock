@@ -666,9 +666,9 @@ Custom tool calls (`customToolCalls` / `customToolCall` blocks in `responsesBloc
 
 2. **`arguments` accepts both objects and strings** — `"arguments": {"key":"value"}` (preferred, auto-stringified) or `"arguments": "{\"key\":\"value\"}"` (legacy). The same applies to `content` fields that contain JSON. The fixture loader detects `typeof === "object"` and calls `JSON.stringify()` automatically.
 
-3. **Latency is per-chunk, not total** — `latency: 100` means 100ms between each SSE chunk, not 100ms total response time. Similarly, `truncateAfterChunks` and `disconnectAfterMs` are for simulating stream interruptions (added in v1.3.0).
+3. **Latency is per-chunk, not total** — `latency: 100` means 100ms between each SSE chunk, not 100ms total response time. It never delays a non-streaming (`stream: false`) response. Similarly, `truncateAfterChunks` and `disconnectAfterMs` are for simulating stream interruptions (added in v1.3.0).
 
-4. **`streamingProfile` takes precedence over `latency`** — when both are set on a fixture, `streamingProfile` controls timing. Use one or the other.
+4. **`streamingProfile` takes precedence over `latency`** — when both are set on a fixture, `streamingProfile` controls timing. Use one or the other. A `streamingProfile` (or `recordedTimings`) also delays `stream: false` OpenAI Chat Completions replies, text and tool calls, by the sum of the per-chunk delays a streamed reply at the same `chunkSize` would get. Other providers' non-streaming replies are not delayed.
 
 5. **Tool result messages don't change the user message** — after a tool call, the client sends the same conversation + tool result. Matching on `userMessage` will hit the SAME fixture again → infinite loop. Always use `predicate` checking `role === "tool"` for tool results. Note: a whole-conversation `role === "tool"` check (e.g. `req.messages.some((m) => m.role === "tool")`) diverges from `hasToolResult`'s current-turn scoping in multi-turn flows — the built-in `hasToolResult` matcher only looks after the last user message, so a later turn whose history carries an earlier tool result still reads `false`.
 

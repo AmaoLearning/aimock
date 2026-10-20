@@ -158,6 +158,20 @@
 }</code></pre>
         </div>
 
+        <h2 id="non-streaming">Non-Streaming Responses</h2>
+        <p>
+          A fixture with <code>streamingProfile</code> or <code>recordedTimings</code> also delays
+          <code>stream: false</code> OpenAI Chat Completions responses, for both text and tool
+          calls. aimock waits for the sum of the per-chunk delays that a streamed reply at the same
+          <code>chunkSize</code> would get (<code>ttft</code>, then a <code>tps</code> gap for each
+          further content chunk), then writes the JSON body. A streamed reply also pays for its role
+          and finish chunks, so the two totals are close but not identical.
+        </p>
+        <p>
+          This applies only to OpenAI Chat Completions. Non-streaming responses from other providers
+          are not delayed.
+        </p>
+
         <h2>Interaction with <code>latency</code></h2>
         <ul>
           <li>
@@ -171,6 +185,11 @@
           <li>
             If <code>streamingProfile</code> is set but has neither <code>ttft</code> nor
             <code>tps</code>, it falls back to <code>latency</code>.
+          </li>
+          <li>
+            <code>latency</code> and <code>--latency</code> are gaps between SSE chunks only. They
+            never delay a non-streaming response, including the fallback case above. Use
+            <code>streamingProfile</code> to delay <code>stream: false</code> replies.
           </li>
         </ul>
 
