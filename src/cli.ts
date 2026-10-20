@@ -56,7 +56,8 @@ Options:
       --responses-tools <mode>  OpenAI Responses tool handling: legacy (default) or extended (namespaced and
                             custom tools visible to matching, custom tool rounds counted, namespaces emitted and recorded)
       --policy <key=value>  Request policy (repeatable): requiredHeaders=off|enforce (default: off),
-                            authErrors=legacy|native (default: legacy)
+                            authErrors=legacy|native (default: legacy),
+                            modelCatalog=legacy|native (default: legacy)
       --journal-max <n>     Max request entries retained in memory (default: 1000, 0 = unbounded)
       --fixture-counts-max <n>  Max unique testIds retained in fixture match-count map (default: 500, 0 = unbounded)
       --provider-openai <url>     Upstream URL for OpenAI (used with --record)

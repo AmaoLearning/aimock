@@ -1493,6 +1493,13 @@ export interface AimockPolicy {
    * Gemini/Vertex routes. WebSocket upgrade rejections always use the legacy body.
    */
   authErrors?: "legacy" | "native";
+  /**
+   * Shared `GET /v1/models` list body format. Default "legacy" keeps the 1.45
+   * OpenAI-format list for every request. "native" returns the Anthropic-format list
+   * when the request sends `anthropic-version`, or `x-api-key` without `Authorization`.
+   * `GET /v1/models/{id}` and the Gemini catalog routes always select by request.
+   */
+  modelCatalog?: "legacy" | "native";
 }
 
 export interface MockServerOptions {

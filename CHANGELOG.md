@@ -14,6 +14,8 @@
 
 - Native Anthropic and Gemini model list/detail routes with provider paging and synthetic metadata. Anthropic and Gemini count routes estimate translated messages, system text, and converted tools. Counts ignore fixture usage and never proxy or record.
 
+- Opt-in Anthropic model list on the shared `GET /v1/models` path: set `policy.modelCatalog` to `"native"` (programmatic option, `llm.policy`, `--policy modelCatalog=native`, or an `X-AIMock-Policy: modelCatalog=native` request header). Requests with `anthropic-version`, or `x-api-key` without `Authorization`, then get the Anthropic-format paged list. The default, `"legacy"`, returns the 1.45 OpenAI-format list for every request, whatever its headers or query parameters, so Anthropic cursor and limit validation does not apply. Anthropic SDK users who call `models.list()` must opt in. The new `GET /v1/models/{id}` detail route and the Gemini `/v1beta/models` routes select their format by request and need no opt-in.
+
 - Responses API (HTTP, SSE, WebSocket): optional `phase` response override (`commentary` | `final_answer`) on assistant message output items; validated on load (#531)
 
 ### Fixed
@@ -26,8 +28,6 @@
 - AG-UI convenience helpers use each request's thread/run IDs and create fresh message/tool-call IDs. Explicit event fixtures retain their authored IDs.
 
 - Anthropic model lists reject unknown `after_id` and `before_id` cursors with 400 `invalid_request_error`, including when a lifecycle filter would return an empty page. Valid cursors and OpenAI-style lists keep their existing paging behavior.
-- Shared `/v1/models` paths select the Anthropic catalog when `anthropic-version` is present, or when `x-api-key` is present without `Authorization`. Non-Anthropic clients that use `x-api-key` alone also receive that catalog. Use `Authorization` without `anthropic-version` to retain the OpenAI format.
-
 - MCP `resources/read`: a resource whose content has neither `text` nor `blob` (including one added without content) now reads as `"text": ""` (#533)
 - MCP `resources/read`: the read uses the resource definition's `mimeType` when its content has none (#533)
 - OpenAI chat completions only, non-streaming (`stream: false`): opt-in timing with the new fixture field `nonStreamingTiming: true`. A fixture that sets it, together with a `streamingProfile` (`ttft`/`tps`/`jitter`) or `recordedTimings`, delays the JSON response by about the total its streamed content chunks would take. This includes text, tool call, combined content and tool call, and `blocks` replies. Without `nonStreamingTiming: true`, the default is unchanged: `stream: false` replies return immediately, also for fixtures with a `streamingProfile` and for recorded fixtures with `recordedTimings`. Bare `latency` and the global `--latency` stay inter-SSE-chunk gaps and never delay non-streaming responses. Other providers are unchanged (#545, #561)

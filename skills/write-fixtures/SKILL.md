@@ -567,7 +567,7 @@ All providers share the same fixture pool — write fixtures once, they work for
 | `POST /v1/videos`                                                                        | OpenAI        | HTTP      |
 | `GET /v1/videos/{id}`                                                                    | OpenAI        | HTTP      |
 
-`GET /v1/models` returns the Anthropic catalog (native paging, `after_id` / `before_id`) when the request has `anthropic-version`, or `x-api-key` without `Authorization`; other callers get the OpenAI format. Catalogs list the fixture model IDs. Catalog and count routes (`count_tokens`, Gemini `:countTokens`) never proxy or record. Counts are a deterministic estimate of about 1 token per 4 characters of messages (plus tool definitions), minimum 1, and ignore fixture `usage`.
+`GET /v1/models` returns the OpenAI-format list by default. With `policy.modelCatalog: "native"` (or `--policy modelCatalog=native`, or the `X-AIMock-Policy: modelCatalog=native` header), it returns the Anthropic list (native paging, `after_id` / `before_id`) when the request has `anthropic-version`, or `x-api-key` without `Authorization`; other callers still get the OpenAI format. `GET /v1/models/{id}` uses the same header selection without the opt-in. Catalogs list the fixture model IDs. Catalog and count routes (`count_tokens`, Gemini `:countTokens`) never proxy or record. Counts are a deterministic estimate of about 1 token per 4 characters of messages (plus tool definitions), minimum 1, and ignore fixture `usage`.
 
 ## Response Template Overrides
 
