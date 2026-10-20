@@ -1230,7 +1230,8 @@ jobs:
             def drift_branch:
               (.headRefName // "") | test("^(fix/drift-|drift-needs-human/)");
             def bot_author:
-              ((.author.login // "") | ascii_downcase) == "app/copilotkit-devops-bot";
+              (($ENV.DRIFT_BOT_LOGIN // "") | ascii_downcase) as $bot
+              | $bot != "" and (((.author.login // "") | ascii_downcase) == $bot);
             def bot_managed: keyed_branch or (drift_branch and bot_author);
             def key_anchored($k): (.headRefName // "") | endswith("-" + $k);
             # WHICH STATES EACH ANCHOR MAY REACH. (No apostrophes in here: JQ_LIB is
@@ -1849,6 +1850,9 @@ jobs:
           CHANGESET_KEY: ${{ steps.sync.outputs.changeset_key }}
           PR_REJECTED: ${{ steps.pr.outputs.rejected }}
           NH_REJECTED: ${{ steps.needs_human_pr.outputs.rejected }}
+          # The same login the self-healer's `bot_author` reads in the persist step
+          # above; a test holds the two values equal.
+          DRIFT_BOT_LOGIN: app/copilotkit-bot
         run: |
           # No `-e`: a run whose telling was DELIVERED must not go red because the
           # receipt could not be filed. Every failure below is handled explicitly
@@ -1881,9 +1885,10 @@ jobs:
           # only a repeated ping.
           BRANCH="$(printf '%s' "$PR_JSON" | jq -r '.headRefName // ""')"
           AUTHOR="$(printf '%s' "$PR_JSON" | jq -r '(.author.login // "") | ascii_downcase')"
+          BOT_LOGIN="$(jq -rn '($ENV.DRIFT_BOT_LOGIN // "") | ascii_downcase')"
           DRIFT_BRANCH=no
           case "$BRANCH" in fix/drift-*|drift-needs-human/*) DRIFT_BRANCH=yes ;; esac
-          if [ "$DRIFT_BRANCH" != yes ] || [ "$AUTHOR" != "app/copilotkit-devops-bot" ]; then
+          if [ "$DRIFT_BRANCH" != yes ] || [ -z "$BOT_LOGIN" ] || [ "$AUTHOR" != "$BOT_LOGIN" ]; then
             echo "::warning::PR #${CLOSED_PR} is not a PR this workflow opened (branch '${BRANCH}', author '${AUTHOR}'), so its body is not machine state to append to — no ack recorded, and the notice reports the suppression again next run"
             exit 0
           fi
