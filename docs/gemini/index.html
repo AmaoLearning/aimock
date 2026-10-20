@@ -185,6 +185,13 @@ curl http://localhost:4010/v1beta/models/gemini-test:countTokens \
           <pre><code>{"error":{"code":401,"message":"Invalid API key","status":"UNAUTHENTICATED"}}</code></pre>
         </div>
         <p>
+          Compatibility change: Gemini and Vertex Google HTTP paths replace the string
+          <code>error.code: "invalid_api_key"</code> with the numeric
+          <code>error.code: 401</code> and <code>error.status: "UNAUTHENTICATED"</code>. Check HTTP
+          401 or the status string instead of the old code. Update tests and clients that read that
+          field.
+        </p>
+        <p>
           A live unauthenticated Gemini count probe returned 403 <code>PERMISSION_DENIED</code>
           for an unregistered caller. aimock intentionally retains 401
           <code>UNAUTHENTICATED</code> for configured inbound authentication. These policies differ.

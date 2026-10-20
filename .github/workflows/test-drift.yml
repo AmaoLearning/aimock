@@ -442,7 +442,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           PREV=$(gh run list --workflow="Drift Tests" --repo="${REPO}" --branch=main --limit=2 --json conclusion --jq '.[1].conclusion // "unknown"')
-          echo "conclusion=$PREV" >> $GITHUB_OUTPUT
+          echo "conclusion=$PREV" >> "$GITHUB_OUTPUT"
 
       - name: Notify Slack
         env:
@@ -1070,7 +1070,8 @@ jobs:
                 ("id" in diff && diff.id !== diff.path)) throw new Error("Unexpected native diff metadata");
             return JSON.stringify([diff.severity, diff.issue, diff.path, diff.expected, diff.real, diff.mock]);
           };
-          const classifyNative = (reportPath: string, observationPath: string, evidenceDir: string) => {
+          const classifyNative = (reportPath: string, observationPath: string, evidenceDir: string,
+              options: { allowLegacyCursorPolicy?: boolean } = {}) => {
             const report = object(read(reportPath));
             const artifact = object(read(observationPath));
             if (typeof report.generatedAt !== "string" || report.generatedAt !== artifact.generatedAt || !Array.isArray(artifact.observations) || !Array.isArray(report.entries))
@@ -1177,17 +1178,39 @@ jobs:
               "native provider Gemini auth local contracts", geminiLocal);
             retain("Gemini native authentication", "inbound policy divergence", "src/response/errors.ts", ["renderError"], gemini, geminiLocal);
 
-            // The documented local catalog retains empty pages for both unknown cursor directions.
+            // Current cursors match native 400 errors. Only cached BASE receipts may
+            // retain the old exact empty-page policy from before this fix.
             const emptyPage = { status: 200, body: { data: [], has_more: false, first_id: null, last_id: null } };
             for (const direction of ["after", "before"]) {
               const id = `anthropic-${direction}-unknown`;
               const cursor = receipt(`vendor:${id}`, "anthropic-catalog");
               anthropicError(cursor.expected, 400, "invalid_request_error", "Model with id aimock-nonexistent-model not found");
               assertion(`${id} received status/body (evidence only)`, "passed", "native provider Anthropic catalog vendor observations");
-              assertion(`${id} comparison`, "failed", "native provider Anthropic catalog vendor observations");
-              localContract(`local:${id}`, "anthropic-catalog", `'${id}'`, "native provider catalog local contracts", emptyPage);
-              retain("Anthropic native catalog", `Native catalog comparison ${id}`, "src/response/catalog/anthropic-page.ts",
-                ["anthropicPage", "renderAnthropicModels"], cursor, emptyPage);
+              const legacy = options.allowLegacyCursorPolicy === true && isDeepStrictEqual(cursor.actual, emptyPage);
+              const local = legacy ? emptyPage : { status: 400, body: { type: "error", error: {
+                type: "invalid_request_error", message: "Model with id aimock-nonexistent-model not found"
+              } } };
+              assertion(`${id} comparison`, legacy ? "failed" : "passed", "native provider Anthropic catalog vendor observations");
+              localContract(`local:${id}`, "anthropic-catalog", `'${id}'`, "native provider catalog local contracts", local);
+              if (!legacy) {
+                if (!isDeepStrictEqual(cursor.actual, local))
+                  throw new Error(`Unexpected native cursor response: ${id}`);
+                // Catalog errors omit the vendor request_id. Bind that one known
+                // warning, including its full metadata; no other diff is allowed.
+                const expectedWarning = { severity: "warning", issue: "PROVIDER ADDED FIELD — in real API but not in SDK or mock",
+                  path: "request_id", expected: "<absent>", real: "string", mock: "<absent>" };
+                const received = nativeResponseDiffs(cursor.expected, cursor.actual).map(normalizeDiff);
+                if (!isDeepStrictEqual(received, [normalizeDiff(expectedWarning)]))
+                  throw new Error(`Unexpected native cursor differences: ${id}`);
+                // Passing comparisons do not emit report entries. An added entry
+                // would be unbound evidence, even if its warning looks familiar.
+                if (entries.some((entry) => entry.provider === "Anthropic native catalog" &&
+                    entry.scenario === `Native catalog comparison ${id}`))
+                  throw new Error(`Unexpected native cursor report entry: ${id}`);
+              } else {
+                retain("Anthropic native catalog", `Native catalog comparison ${id}`, "src/response/catalog/anthropic-page.ts",
+                  ["anthropicPage", "renderAnthropicModels"], cursor, local);
+              }
             }
             const policyKeys = new Set(validatedEntries.flatMap((entry) => (entry.diffs as unknown[]).map((value) =>
               JSON.stringify([entry.provider, entry.scenario, String(object(value).id ?? object(value).path)]))));
@@ -1238,7 +1261,8 @@ jobs:
           if (mode !== "delta") {
             try {
               const disposition = classifyNative(process.env.NATIVE_REPORT_PATH ?? "drift-report.json",
-                process.env.NATIVE_OBSERVATIONS_PATH ?? "drift-observations.json", process.env.NATIVE_EVIDENCE_DIR ?? "drift-evidence");
+                process.env.NATIVE_OBSERVATIONS_PATH ?? "drift-observations.json", process.env.NATIVE_EVIDENCE_DIR ?? "drift-evidence",
+                { allowLegacyCursorPolicy: mode === "cache" });
               const rawExit = Number(process.env.NATIVE_RAW_EXIT_CODE);
               const effectiveExit = rawExit === 2 ? disposition.effectiveExit : rawExit;
               console.log(JSON.stringify({ rawExit, effectiveExit, invocationId: disposition.invocationId, policy: "validated documented native policy differences" }));

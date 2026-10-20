@@ -29,13 +29,13 @@ export function anthropicPage(
     firstId: null,
     lastId: null,
   });
-  if (lifecycle.length > 0 && !lifecycle.includes("active")) return { page: empty() };
   const after = query.get("after_id");
   const before = query.get("before_id");
   const afterIndex = after === null ? -1 : ids.indexOf(after);
   const beforeIndex = before === null ? ids.length : ids.indexOf(before);
-  if ((after !== null && afterIndex === -1) || (before !== null && beforeIndex === -1))
-    return { page: empty() };
+  if (after !== null && afterIndex === -1) return { error: `Model with id ${after} not found` };
+  if (before !== null && beforeIndex === -1) return { error: `Model with id ${before} not found` };
+  if (lifecycle.length > 0 && !lifecycle.includes("active")) return { page: empty() };
   const available = ids.slice(afterIndex + 1, beforeIndex);
   // The SDK continues backward whenever before_id is present, retaining after_id.
   const selected = before !== null ? available.slice(-limit) : available.slice(0, limit);
