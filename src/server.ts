@@ -2428,11 +2428,14 @@ async function handleCompletions(
     };
   };
 
-  // Non-streaming (`stream: false`) timing is opt-in: only an explicit fixture
-  // `streamingProfile` or `recordedTimings` delays the single JSON write, by the
-  // total a streamed reply at the same chunkSize would take. Bare `latency` /
-  // `--latency` is the gap between SSE chunks only and never delays this path.
+  // Non-streaming (`stream: false`) timing is opt-in per fixture: only a
+  // fixture with `nonStreamingTiming: true` AND an explicit `streamingProfile`
+  // or `recordedTimings` delays the single JSON write, by the total a streamed
+  // reply at the same chunkSize would take. Without the flag the reply returns
+  // immediately (the pre-#545 default). Bare `latency` / `--latency` is the gap
+  // between SSE chunks only and never delays this path.
   const awaitNonStreamingTiming = (contentLength: number): Promise<void> => {
+    if (fixture.nonStreamingTiming !== true) return Promise.resolve();
     if (!fixture.streamingProfile && !fixture.recordedTimings) return Promise.resolve();
     const chunkCount = Math.max(1, Math.ceil(contentLength / chunkSize));
     return delay(
