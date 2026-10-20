@@ -20,6 +20,8 @@
 
 ### Fixed
 
+- Anthropic Messages streaming stops when the client disconnects mid-stream. Previously aimock kept sleeping through per-chunk latency and writing events into the closed socket, and the journal recorded the request as complete. The journal entry now has `interrupted: true` and `interruptReason: "client aborted"`, matching other aimock disconnect journal entries. Fixture interruptions (`truncateAfterChunks`, `disconnectAfterMs`) keep their own reasons. ([#557](https://github.com/CopilotKit/aimock/pull/557))
+
 - Bedrock SDK examples configure `NodeHttpHandler` for aimock's HTTP/1 server; the current SDK's default HTTP/2 transport remains unsupported.
 
 - Ollama `/api/embed` returns an `embeddings` matrix with one vector per input, honors fallback dimensions, and retains batch vectors and metadata through recording/replay. Recorded matches preserve input shape, dimensions, model and operation, so different requests do not reuse the wrong batch or match legacy/OpenAI embedding routes. `/api/embeddings` keeps its legacy single-vector response.
