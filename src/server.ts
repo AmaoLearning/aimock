@@ -2658,7 +2658,13 @@ async function handleCompletions(
     // entry keeps the request body and the matched fixture (routeError amends
     // it).
     const toolCalls = requireEmittedFunctionToolCalls(response, wire);
+    // The same authoritative payload the streamed reply would carry: text
+    // content plus each tool call's name and arguments.
+    const completionText = blockOutcome
+      ? blockOutcome.content + blockOutcome.toolCalls.map((tc) => tc.name + tc.arguments).join("")
+      : (response.content ?? "") + toolCalls.map((tc) => tc.name + tc.arguments).join("");
     if (!streaming) {
+      await awaitNonStreamingTiming((effReasoning?.length ?? 0) + completionText.length);
       const completion = buildContentWithToolCallsCompletion(
         blockOutcome?.content ?? response.content ?? "",
         blockOutcome?.toolCalls ?? toolCalls,
@@ -2686,9 +2692,6 @@ async function handleCompletions(
         blockOutcome?.ordered,
       );
       // Estimate usage from the same authoritative payload sent to the client.
-      const completionText = blockOutcome
-        ? blockOutcome.content + blockOutcome.toolCalls.map((tc) => tc.name + tc.arguments).join("")
-        : (response.content ?? "") + toolCalls.map((tc) => tc.name + tc.arguments).join("");
       const usageChunk = emitStreamingUsage
         ? buildUsageChunk(
             chunks[0]?.id ?? "chatcmpl-unknown",
