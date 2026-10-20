@@ -435,6 +435,11 @@ describe.skipIf(child)("live observation collector transport", () => {
             expect(result.stderr).toContain(
               "Live observation evidence unavailable; observation artifact was not written.",
             );
+            expect(result.stderr).toContain(
+              "  Assertions without console context: 1\n    - [outside-root] › actual collector observation producer › " +
+                "ordinary emitter calls at reporter size boundary: console output unavailable: " +
+                "record exceeded 262144 bytes (337149 bytes)\n",
+            );
             expect(existsSync(observations)).toBe(false);
             expect(result.status).toBe(1);
             return;
@@ -470,6 +475,11 @@ describe.skipIf(child)("live observation collector transport", () => {
             expect(owner.consoleContext).toEqual({ availability: "unavailable", recordCount: 0 });
             expect(result.stderr).toContain(
               "Live observation evidence unavailable; observation artifact was not written.",
+            );
+            expect(result.stderr).toContain(
+              "  Assertions without console context: 1\n    - [outside-root] › actual collector observation producer › " +
+                "ordinary emitter calls at reporter size boundary: console output unavailable: " +
+                "record exceeded 262144 bytes (337149 bytes)\n",
             );
             expect(existsSync(observations)).toBe(false);
           }
