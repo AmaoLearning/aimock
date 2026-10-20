@@ -1,0 +1,28 @@
+[Unit]
+Description=AIMock session recording and replay gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/aimock/deploy
+ExecStart=/opt/aimock/runtime/node_modules/node/bin/node /opt/aimock/deploy/gateway.mjs
+Environment=AIMOCK_WORKERS=8
+Environment=AIMOCK_PORT=4010
+Environment=AIMOCK_DATA_ROOT=/mnt/shared-storage-gpfs2/df4-hicache/aimock-v1
+Environment=NODE_OPTIONS=--max-old-space-size=4096
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=35
+LimitNOFILE=131072
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/mnt/shared-storage-gpfs2/df4-hicache/aimock-v1
+MemoryMax=48G
+TasksMax=1024
+
+[Install]
+WantedBy=multi-user.target
