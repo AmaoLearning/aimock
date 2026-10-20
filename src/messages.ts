@@ -7,6 +7,9 @@
  */
 
 import type * as http from "node:http";
+import { renderError } from "./response/errors.js";
+import { resolvePolicy, resolveRequestDecisions, strictOverrideField } from "./response/policy.js";
+import { missingRequiredHeader } from "./response/profiles.js";
 import type {
   ChatCompletionRequest,
   ChatMessage,
@@ -35,13 +38,12 @@ import {
   isErrorResponse,
   resolveFixtureBlockOutcome,
   flattenHeaders,
+  resolveRequestId,
   isJsonObject,
   getTestId,
   resolveResponse,
-  resolveStrictMode,
   resolveReasoningForModel,
   resolveReasoningArtifactsForModel,
-  strictOverrideField,
   getContext,
   strictNoMatchMessage,
   strictNoMatchLogLine,
@@ -55,6 +57,11 @@ import { applyChaosAsync } from "./chaos.js";
 import { proxyAndRecord } from "./recorder.js";
 import { planMisbehavior, recordMisbehaviorOutcome } from "./misbehavior.js";
 import type { MisbehaviorPlan } from "./misbehavior.js";
+import { mapAnthropicFinish } from "./response/finish.js";
+import {
+  resolve as resolveAnthropicUsage,
+  render as renderAnthropicUsage,
+} from "./response/usage/codecs/anthropic.js";
 
 /**
  * Non-empty placeholder signature written into emitted `thinking` blocks.
@@ -404,21 +411,7 @@ function thinkingViolationMessage(v: ThinkingViolation): string {
 
 function claudeStopReason(finishReason: string | undefined, defaultReason: string): string {
   if (!finishReason) return defaultReason;
-  if (finishReason === "stop") return "end_turn";
-  if (finishReason === "tool_calls") return "tool_use";
-  if (finishReason === "length") return "max_tokens";
-  return finishReason;
-}
-
-function claudeUsage(overrides?: ResponseOverrides): {
-  input_tokens: number;
-  output_tokens: number;
-} {
-  if (!overrides?.usage) return { input_tokens: 0, output_tokens: 0 };
-  return {
-    input_tokens: overrides.usage.input_tokens ?? overrides.usage.prompt_tokens ?? 0,
-    output_tokens: overrides.usage.output_tokens ?? overrides.usage.completion_tokens ?? 0,
-  };
+  return mapAnthropicFinish(finishReason);
 }
 
 interface ClaudeSSEEvent {
@@ -489,7 +482,7 @@ function buildClaudeTextStreamEvents(
       model: effectiveModel,
       stop_reason: null,
       stop_sequence: null,
-      usage: claudeUsage(overrides),
+      usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-start"),
     },
   });
 
@@ -564,7 +557,7 @@ function buildClaudeTextStreamEvents(
       stop_reason: claudeStopReason(overrides?.finishReason, "end_turn"),
       stop_sequence: null,
     },
-    usage: { output_tokens: claudeUsage(overrides).output_tokens },
+    usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-delta"),
   });
 
   // message_stop
@@ -601,7 +594,7 @@ function buildClaudeToolCallStreamEvents(
       model: effectiveModel,
       stop_reason: null,
       stop_sequence: null,
-      usage: claudeUsage(overrides),
+      usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-start"),
     },
   });
 
@@ -695,7 +688,7 @@ function buildClaudeToolCallStreamEvents(
       stop_reason: claudeStopReason(overrides?.finishReason, "tool_use"),
       stop_sequence: null,
     },
-    usage: { output_tokens: claudeUsage(overrides).output_tokens },
+    usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-delta"),
   });
 
   // message_stop
@@ -760,7 +753,7 @@ function buildClaudeTextResponse(
     model: overrides?.model ?? model,
     stop_reason: claudeStopReason(overrides?.finishReason, "end_turn"),
     stop_sequence: null,
-    usage: claudeUsage(overrides),
+    usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-final"),
   };
 }
 
@@ -811,7 +804,7 @@ function buildClaudeToolCallResponse(
     model: overrides?.model ?? model,
     stop_reason: claudeStopReason(overrides?.finishReason, "tool_use"),
     stop_sequence: null,
-    usage: claudeUsage(overrides),
+    usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-final"),
   };
 }
 
@@ -845,7 +838,7 @@ function buildClaudeContentWithToolCallsStreamEvents(
       model: effectiveModel,
       stop_reason: null,
       stop_sequence: null,
-      usage: claudeUsage(overrides),
+      usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-start"),
     },
   });
 
@@ -966,7 +959,7 @@ function buildClaudeContentWithToolCallsStreamEvents(
         ),
         stop_sequence: null,
       },
-      usage: { output_tokens: claudeUsage(overrides).output_tokens },
+      usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-delta"),
     });
 
     // message_stop
@@ -1044,7 +1037,7 @@ function buildClaudeContentWithToolCallsStreamEvents(
       stop_reason: claudeStopReason(overrides?.finishReason, "tool_use"),
       stop_sequence: null,
     },
-    usage: { output_tokens: claudeUsage(overrides).output_tokens },
+    usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-delta"),
   });
 
   // message_stop
@@ -1131,7 +1124,7 @@ function buildClaudeContentWithToolCallsResponse(
       blockHasTools === false ? "end_turn" : "tool_use",
     ),
     stop_sequence: null,
-    usage: claudeUsage(overrides),
+    usage: renderAnthropicUsage(resolveAnthropicUsage(overrides), "messages-final"),
   };
 }
 
@@ -1229,15 +1222,16 @@ export function prepareClaudeMisbehavior(
     context.logger,
   );
   const content = outcome?.content ?? ("content" in response ? (response.content ?? "") : "");
-  const usage = {
-    input_tokens: estimatePromptTokens(context.request.messages),
-    output_tokens: estimateTokens(
+  const resolvedUsage = resolveAnthropicUsage(undefined, {
+    inputTokens: estimatePromptTokens(context.request.messages),
+    outputTokens: estimateTokens(
       content +
         servedToolCalls.map((call) => call.name + call.arguments).join("") +
         (reasoning ?? "") +
         (plan.refusal ?? ""),
     ),
-  };
+  });
+  const usage = renderAnthropicUsage(resolvedUsage, "messages-final", "applied-misbehavior");
   const overrides = {
     ...extractOverrides(response),
     ...(plan.stop === "length" ? { finishReason: "length" } : {}),
@@ -1282,7 +1276,7 @@ export function prepareClaudeMisbehavior(
       {
         type: "message_delta",
         delta: { stop_reason: "max_tokens", stop_sequence: null },
-        usage: { output_tokens: usage.output_tokens },
+        usage: renderAnthropicUsage(resolvedUsage, "messages-delta", "applied-misbehavior"),
       },
       { type: "message_stop" },
     );
@@ -1325,7 +1319,7 @@ export function prepareClaudeMisbehavior(
       {
         type: "message_delta",
         delta: { stop_reason: stop, stop_sequence: null, ...detail },
-        usage: { output_tokens: usage.output_tokens },
+        usage: renderAnthropicUsage(resolvedUsage, "messages-delta", "applied-misbehavior"),
       },
       { type: "message_stop" },
     ];
@@ -1419,30 +1413,51 @@ async function writeClaudeSSEStream(
   const latency = opts.latency ?? 0;
   const profile = opts.streamingProfile;
   const { recordedTimings, replaySpeed } = opts;
-  const signal = opts.signal;
   const onChunkSent = opts.onChunkSent;
 
   if (res.writableEnded) return true;
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection", "keep-alive");
+  if (res.destroyed) return false;
 
-  let chunkIndex = 0;
-  for (const event of events) {
-    const chunkDelay = calculateDelay(chunkIndex, profile, latency, recordedTimings, replaySpeed);
-    if (chunkDelay > 0) await delay(chunkDelay, signal);
-    if (signal?.aborted) return false;
-    if (res.writableEnded) return true;
-    res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
-    onChunkSent?.();
-    if (signal?.aborted) return false;
-    chunkIndex++;
-  }
+  // Stop streaming when either the fixture's interruption signal fires or the
+  // client disconnects before the response finishes. Without the close
+  // listener, a dropped client leaves the loop sleeping through per-chunk
+  // latency and writing into a dead socket, and the journal records the
+  // request as complete.
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const abort = () => controller.abort();
+  const onClose = () => {
+    if (!res.writableFinished) abort();
+  };
+  res.once("close", onClose);
+  opts.signal?.addEventListener("abort", abort, { once: true });
+  if (opts.signal?.aborted) abort();
 
-  if (!res.writableEnded) {
-    res.end();
+  try {
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+
+    let chunkIndex = 0;
+    for (const event of events) {
+      const chunkDelay = calculateDelay(chunkIndex, profile, latency, recordedTimings, replaySpeed);
+      if (chunkDelay > 0) await delay(chunkDelay, signal);
+      if (signal.aborted || res.destroyed) return false;
+      if (res.writableEnded) return true;
+      res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      onChunkSent?.();
+      if (signal.aborted || res.destroyed) return false;
+      chunkIndex++;
+    }
+
+    if (!res.writableEnded) {
+      res.end();
+    }
+    return true;
+  } finally {
+    res.off("close", onClose);
+    opts.signal?.removeEventListener("abort", abort);
   }
-  return true;
 }
 
 // ─── Request handler ────────────────────────────────────────────────────────
@@ -1459,6 +1474,39 @@ export async function handleMessages(
   const { logger } = defaults;
   setCorsHeaders(res);
 
+  // Resolve here so exported direct calls obey the same policy as server routes.
+  const policy = resolvePolicy(defaults, req.headers);
+  const missingHeader =
+    policy.requiredHeaders === "enforce"
+      ? missingRequiredHeader("messages", req.headers)
+      : undefined;
+  if (missingHeader) {
+    const { id: requestId } = resolveRequestId(req.headers);
+    req.headers["x-request-id"] = requestId;
+    res.setHeader("X-Request-Id", requestId);
+    journal.add({
+      method: req.method ?? "POST",
+      path: req.url ?? "/v1/messages",
+      headers: flattenHeaders(req.headers),
+      body: null,
+      response: {
+        status: 400,
+        fixture: null,
+        source: "internal",
+        ...strictOverrideField(defaults.strict, req.headers),
+      },
+    });
+    writeErrorResponse(
+      res,
+      400,
+      renderError("messages", "thinking", {
+        message: `${missingHeader}: header is required`,
+        requestId,
+      }).body,
+    );
+    return;
+  }
+
   let claudeReq: ClaudeRequest;
   try {
     claudeReq = JSON.parse(raw) as ClaudeRequest;
@@ -1474,12 +1522,10 @@ export async function handleMessages(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: `Malformed JSON: ${detail}`,
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("messages", "validation", {
+        message: `Malformed JSON: ${detail}`,
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -1498,12 +1544,10 @@ export async function handleMessages(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({
-        error: {
-          message: "Request body must be a JSON object",
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("messages", "validation", {
+        message: "Request body must be a JSON object",
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -1530,7 +1574,10 @@ export async function handleMessages(
     writeErrorResponse(
       res,
       400,
-      JSON.stringify({ error: { message: messagesError, type: "invalid_request_error" } }),
+      renderError("messages", "validation", {
+        message: messagesError,
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -1541,7 +1588,7 @@ export async function handleMessages(
   // the real Anthropic API, which 400s on these.
   const thinkingViolation = validateThinkingInvariants(claudeReq);
   if (thinkingViolation) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).thinkingRejection;
     const violationMessage = thinkingViolationMessage(thinkingViolation);
     if (effectiveStrict) {
       logger.error(`THINKING: ${violationMessage}`);
@@ -1559,13 +1606,7 @@ export async function handleMessages(
       writeErrorResponse(
         res,
         400,
-        JSON.stringify({
-          type: "error",
-          error: {
-            type: "invalid_request_error",
-            message: violationMessage,
-          },
-        }),
+        renderError("messages", "thinking", { message: violationMessage }).body,
       );
       return;
     }
@@ -1592,7 +1633,10 @@ export async function handleMessages(
       writeErrorResponse(
         res,
         400,
-        JSON.stringify({ error: { message: toolsError, type: "invalid_request_error" } }),
+        renderError("messages", "validation", {
+          message: toolsError,
+          type: "invalid_request_error",
+        }).body,
       );
       return;
     }
@@ -1648,7 +1692,7 @@ export async function handleMessages(
     return;
 
   if (!fixture) {
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(defaults.strict, req.headers).fixtureMiss;
     if (effectiveStrict) {
       const strictStatus = 503;
       const strictMessage = strictNoMatchMessage(skippedBySequenceOrTurn);
@@ -1673,12 +1717,10 @@ export async function handleMessages(
       writeErrorResponse(
         res,
         strictStatus,
-        JSON.stringify({
-          error: {
-            message: strictMessage,
-            type: "invalid_request_error",
-          },
-        }),
+        renderError("messages", "strict-miss", {
+          message: strictMessage,
+          type: "invalid_request_error",
+        }).body,
       );
       return;
     }
@@ -1719,12 +1761,10 @@ export async function handleMessages(
     writeErrorResponse(
       res,
       404,
-      JSON.stringify({
-        error: {
-          message: "No fixture matched",
-          type: "invalid_request_error",
-        },
-      }),
+      renderError("messages", "fixture-miss", {
+        message: "No fixture matched",
+        type: "invalid_request_error",
+      }).body,
     );
     return;
   }
@@ -1756,14 +1796,11 @@ export async function handleMessages(
     writeErrorResponse(
       res,
       misbehavior.status,
-      JSON.stringify({
-        type: "error",
-        error: {
-          type: misbehavior.status === 400 ? "invalid_request_error" : "api_error",
-          code: misbehavior.code,
-          message: misbehavior.message,
-        },
-      }),
+      renderError("messages", "misbehavior", {
+        type: misbehavior.status === 400 ? "invalid_request_error" : "api_error",
+        code: misbehavior.code,
+        message: misbehavior.message,
+      }).body,
     );
     return;
   }
@@ -1776,7 +1813,7 @@ export async function handleMessages(
       stream: claudeReq.stream === true,
       chunkSize,
       logger,
-      strict: resolveStrictMode(defaults.strict, req.headers),
+      strict: resolveRequestDecisions(defaults.strict, req.headers).reasoningSuppression,
     });
     const entry = journal.add({
       method: req.method ?? "POST",
@@ -1803,7 +1840,7 @@ export async function handleMessages(
         if (!completed) {
           if (!res.writableEnded) res.destroy();
           entry.response.interrupted = true;
-          entry.response.interruptReason = interruption?.reason();
+          entry.response.interruptReason = interruption?.reason() ?? "client aborted";
         }
       } finally {
         interruption?.cleanup();
@@ -1829,14 +1866,7 @@ export async function handleMessages(
       testId,
     });
     // Anthropic-style error format: { type: "error", error: { type, message } }
-    const anthropicError = {
-      type: "error",
-      error: {
-        type: response.error.type ?? "api_error",
-        message: response.error.message,
-      },
-    };
-    writeErrorResponse(res, status, JSON.stringify(anthropicError), {
+    writeErrorResponse(res, status, renderError("messages", "fixture", response.error).body, {
       retryAfter: response.retryAfter,
     });
     return;
@@ -1850,7 +1880,10 @@ export async function handleMessages(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
@@ -1918,7 +1951,7 @@ export async function handleMessages(
       if (!completed) {
         if (!res.writableEnded) res.destroy();
         journalEntry.response.interrupted = true;
-        journalEntry.response.interruptReason = interruption?.reason();
+        journalEntry.response.interruptReason = interruption?.reason() ?? "client aborted";
       }
       interruption?.cleanup();
     }
@@ -1933,7 +1966,10 @@ export async function handleMessages(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
@@ -1994,7 +2030,7 @@ export async function handleMessages(
       if (!completed) {
         if (!res.writableEnded) res.destroy();
         journalEntry.response.interrupted = true;
-        journalEntry.response.interruptReason = interruption?.reason();
+        journalEntry.response.interruptReason = interruption?.reason() ?? "client aborted";
       }
       interruption?.cleanup();
     }
@@ -2009,7 +2045,10 @@ export async function handleMessages(
       );
     }
     const overrides = extractOverrides(response);
-    const effectiveStrict = resolveStrictMode(defaults.strict, req.headers);
+    const effectiveStrict = resolveRequestDecisions(
+      defaults.strict,
+      req.headers,
+    ).reasoningSuppression;
     const effReasoning = resolveReasoningForModel(
       response.reasoning,
       completionReq.model,
@@ -2073,7 +2112,7 @@ export async function handleMessages(
       if (!completed) {
         if (!res.writableEnded) res.destroy();
         journalEntry.response.interrupted = true;
-        journalEntry.response.interruptReason = interruption?.reason();
+        journalEntry.response.interruptReason = interruption?.reason() ?? "client aborted";
       }
       interruption?.cleanup();
     }
@@ -2092,11 +2131,9 @@ export async function handleMessages(
   writeErrorResponse(
     res,
     500,
-    JSON.stringify({
-      error: {
-        message: "Fixture response did not match any known type",
-        type: "server_error",
-      },
-    }),
+    renderError("messages", "unknown-response", {
+      message: "Fixture response did not match any known type",
+      type: "server_error",
+    }).body,
   );
 }
