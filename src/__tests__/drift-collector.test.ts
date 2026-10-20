@@ -17,7 +17,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { knownVoiceModelFamilies } from "./drift/voice-models.js";
+import { isKnownVoiceModelFamily } from "./drift/voice-models.js";
 import { excludeFamilies } from "./drift/model-registry.js";
 import { unclassifiedFamilies } from "./drift/text-drift.js";
 import { formatDriftReport } from "./drift/schema.js";
@@ -5977,9 +5977,9 @@ describe("OpenAI Live collector attribution and runtime coverage", () => {
     expect(exitCodeOf(result)).toBe(2);
   });
   it("preserves text exclusion and the mini negative control", () => {
-    expect(knownVoiceModelFamilies.has("gpt-live-1")).toBe(true);
+    expect(isKnownVoiceModelFamily("gpt-live-1")).toBe(true);
     expect(excludeFamilies.openai.has("gpt-live-1")).toBe(true);
-    expect(knownVoiceModelFamilies.has("gpt-live-1-mini")).toBe(false);
+    expect(isKnownVoiceModelFamily("gpt-live-1-mini")).toBe(false);
     expect(unclassifiedFamilies(["gpt-live-1-mini"], "openai")).toContain("gpt-live-1-mini");
   });
 });
