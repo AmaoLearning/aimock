@@ -35,22 +35,30 @@ config/client-key           下游 API key，权限 600
 挂载 gpfs3 部署盘和 gpfs2 数据盘到相同绝对路径，并开启到真实模型入口的出站网络。
 共享部署包没有依赖工作机的 `/opt`、`/etc`、系统 Node、nginx 或 systemd。
 
-新服务的启动命令可以完整填写为：
+平台的启动命令栏请填写下面这一行：
 
-```bash
-exec env \
-  AIMOCK_DEPLOY_ROOT=/mnt/shared-storage-gpfs3/yicheng-deploy/aimock \
-  AIMOCK_HOST=0.0.0.0 \
-  AIMOCK_PORT=4010 \
-  AIMOCK_WORKERS=8 \
-  AIMOCK_DATA_ROOT=/mnt/shared-storage-gpfs2/df4-hicache/aimock-v1 \
-  AIMOCK_UPSTREAM_CONFIG=/mnt/shared-storage-gpfs3/yicheng-deploy/aimock/config/upstream.json \
-  AIMOCK_CLIENT_KEY_FILE=/mnt/shared-storage-gpfs3/yicheng-deploy/aimock/config/client-key \
-  NODE_OPTIONS=--max-old-space-size=4096 \
-  /bin/bash /mnt/shared-storage-gpfs3/yicheng-deploy/aimock/start.sh
+```text
+/bin/bash /mnt/shared-storage-gpfs3/yicheng-deploy/aimock/start.sh
 ```
 
-默认值相同时，也可简写为 `exec /bin/bash /mnt/shared-storage-gpfs3/yicheng-deploy/aimock/start.sh`。
+启动脚本已包含全部默认参数。平台启动栏推荐使用单行脚本入口，避免多行 `exec env`
+中的反斜杠被当成普通参数。若看到 `env: '\\': No such file or directory`
+和 `exit status 127`，说明尚未进入启动脚本；将命令替换为上面的单行形式。
+如果通过 API 填写 `Command` 数组，可使用单个元素，内容就是上述整行命令。
+
+如需覆盖默认值，在平台的环境变量配置中逐项填写：
+
+| 环境变量                 | 默认值                                                                 |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `AIMOCK_HOST`            | `0.0.0.0`                                                              |
+| `AIMOCK_PORT`            | `4010`                                                                 |
+| `AIMOCK_WORKERS`         | `8`                                                                    |
+| `AIMOCK_DEPLOY_ROOT`     | `/mnt/shared-storage-gpfs3/yicheng-deploy/aimock`                      |
+| `AIMOCK_DATA_ROOT`       | `/mnt/shared-storage-gpfs2/df4-hicache/aimock-v1`                      |
+| `AIMOCK_UPSTREAM_CONFIG` | `/mnt/shared-storage-gpfs3/yicheng-deploy/aimock/config/upstream.json` |
+| `AIMOCK_CLIENT_KEY_FILE` | `/mnt/shared-storage-gpfs3/yicheng-deploy/aimock/config/client-key`    |
+| `NODE_OPTIONS`           | `--max-old-space-size=4096`                                            |
+
 平台将 HTTP 公网服务映射到容器 **4010** 端口，健康检查使用 **GET /healthz**。
 直接映射时没有 `/aimock/` 前缀，录制 base URL 为 `https://<公网域名>/record/<session-id>/v1`。
 平台需保留 Authorization 和会话头，允许 SSE，关闭代理缓冲，流式超时建议至少 300 秒。
