@@ -1044,6 +1044,16 @@ builderMock.onLive({ model: "gpt-live-1" }, transcript);</code></pre>
               </td>
             </tr>
             <tr>
+              <td>nonStreamingTiming</td>
+              <td>boolean</td>
+              <td>
+                Also delay <code>stream: false</code> OpenAI Chat Completions replies by the
+                fixture's <code>streamingProfile</code> or <code>recordedTimings</code> (default
+                <code>false</code>). See
+                <a href="/streaming-physics#non-streaming">Non-Streaming Responses</a>
+              </td>
+            </tr>
+            <tr>
               <td>chaos</td>
               <td>object</td>
               <td>
