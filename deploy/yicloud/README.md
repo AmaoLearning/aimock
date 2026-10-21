@@ -1,0 +1,278 @@
+# YiCloud 会话录制与回放
+
+此部署为 OpenAI **Chat Completions** 提供在线录制代理和离线 AIMock 回放。
+只处理文本、function tool calls 和工具结果。不会执行工具，不接入 MCP、多媒体或 dsec suites。
+
+```text
+录制：Agent → 会话网关 → 真实模型
+                  ← 原始 HTTP 状态 / JSON 或 SSE
+                  → 每次请求独立存储 → 原生 AIMock fixture
+回放：Agent → trace / step 定位 → 原生 AIMock → 文本或工具调用
+```
+
+录制每次都访问真实模型，包括重复请求。响应内容逐段转发；不会等待完整回答再返回。
+原生 AIMock 1.45.1 的代理会把上游 429/503 改为 502，因此在线链路使用透明 HTTP 转发，
+AIMock 负责流内容折叠、fixture 和回放。回放未命中明确失败，没有真实模型 fallback。
+
+## 安装
+
+### 新公网服务：从共享盘直接启动
+
+共享部署目录为 `/mnt/shared-storage-gpfs3/yicheng-deploy/aimock`，包含：
+
+```text
+start.sh                   前台启动入口
+current -> releases/...    已发布源码
+runtime/node-22.22.0-aimock-1.45.1/
+    bin/node               Linux x86_64 Node 22.22.0
+    node_modules/          固定 AIMock 1.45.1，无需联网安装
+config/upstream.json        已配置的 YICLOUD 上游参数，权限 600
+config/client-key           下游 API key，权限 600
+```
+
+新服务使用与工作机相同的 Linux x86_64 Ubuntu 24.04 基础镜像，需有 Bash、glibc 和 libstdc++。
+初始资源按 16 CPU / 160 GiB、8 workers 配置。以 root 启动，与现有数据和配置的 UID 一致；
+挂载 gpfs3 部署盘和 gpfs2 数据盘到相同绝对路径，并开启到真实模型入口的出站网络。
+共享部署包没有依赖工作机的 `/opt`、`/etc`、系统 Node、nginx 或 systemd。
+
+平台的启动命令栏请填写下面这一行：
+
+```text
+/bin/bash /mnt/shared-storage-gpfs3/yicheng-deploy/aimock/start.sh
+```
+
+启动脚本已包含全部默认参数。平台启动栏推荐使用单行脚本入口，避免多行 `exec env`
+中的反斜杠被当成普通参数。若看到 `env: '\\': No such file or directory`
+和 `exit status 127`，说明尚未进入启动脚本；将命令替换为上面的单行形式。
+如果通过 API 填写 `Command` 数组，可使用单个元素，内容就是上述整行命令。
+
+如需覆盖默认值，在平台的环境变量配置中逐项填写：
+
+| 环境变量                 | 默认值                                                                 |
+| ------------------------ | ---------------------------------------------------------------------- |
+| `AIMOCK_HOST`            | `0.0.0.0`                                                              |
+| `AIMOCK_PORT`            | `4010`                                                                 |
+| `AIMOCK_WORKERS`         | `8`                                                                    |
+| `AIMOCK_DEPLOY_ROOT`     | `/mnt/shared-storage-gpfs3/yicheng-deploy/aimock`                      |
+| `AIMOCK_DATA_ROOT`       | `/mnt/shared-storage-gpfs2/df4-hicache/aimock-v1`                      |
+| `AIMOCK_UPSTREAM_CONFIG` | `/mnt/shared-storage-gpfs3/yicheng-deploy/aimock/config/upstream.json` |
+| `AIMOCK_CLIENT_KEY_FILE` | `/mnt/shared-storage-gpfs3/yicheng-deploy/aimock/config/client-key`    |
+| `NODE_OPTIONS`           | `--max-old-space-size=4096`                                            |
+
+平台将 HTTP 公网服务映射到容器 **4010** 端口，健康检查使用 **GET /healthz**。
+直接映射时没有 `/aimock/` 前缀，录制 base URL 为 `https://<公网域名>/record/<session-id>/v1`。
+平台需保留 Authorization 和会话头，允许 SSE，关闭代理缓冲，流式超时建议至少 300 秒。
+
+启动脚本在 fork workers 前检查两块盘确实挂载、配置仅属主可读、数据目录可写及端口未占用；
+缺失挂载会明确失败，不会把录制静默写到容器本地磁盘。日志写 stdout/stderr，主进程接收平台
+SIGTERM 后排空在途请求。平台应给予至少 35 秒停止宽限期；无需 nohup 或后台运行。
+
+共享部署包由工作机上已验证的环境生成，更新源码时运行：
+
+```bash
+python3 deploy/yicloud/prepare-shared.py --release <新的版本标识>
+```
+
+该命令需在现有工作机执行，复用 `/opt/aimock/runtime` 作为打包来源和 `/etc/aimock` 作为初次
+配置来源。它不覆盖已有 release，不删除录制，不替换已有共享配置；发布后新服务启动只读取共享盘。
+每个 release 的 `release-manifest.json` 保存源码及 Node 二进制 SHA-256。原工作机上的
+systemd 服务继续独立运行；新旧入口使用不同 session ID 时可以并行录制到同一数据根目录。
+
+`tests/shared-start-smoke.py` 会从 `/tmp` 工作目录调用共享盘入口，在独立的 14010 端口启动
+两个 worker；验证真实 read 工具录制、严格回放、401 鉴权、缺配置/端口占用拒绝和 SIGTERM
+正常退出，并确认进程可执行文件与 AIMock 模块都来自 gpfs3。该脚本不改动原 4010 服务。
+
+### 现有工作机的 systemd 安装
+
+目标是专用工作机 `yicloud-aimock-cpu`，使用 8 个 worker，不替换系统 Node。
+固定 Node `22.22.0`、AIMock `1.45.1`；验证使用 `@earendil-works/pi-coding-agent@0.81.1`。
+这是部署目录，运行固定发布包，不要求将整个上游构建链安装到工作机。
+
+先在机器上以权限 `600` 创建 `/etc/aimock/upstream.json`，字段来自已有环境变量：
+
+```json
+{
+  "YICLOUD_API_KEY": "<从受保护配置读取>",
+  "YICLOUD_MODEL_URL": "https://<模型入口>/v1/chat/completions",
+  "YICLOUD_QWEN_MODEL": "<环境变量中的完整模型 ID>"
+}
+```
+
+不要将真实配置、密钥、请求或录制数据提交到 Git。随后运行：
+
+```bash
+sudo bash deploy/yicloud/install.sh
+systemctl status aimock-gateway
+curl http://127.0.0.1:4010/healthz
+```
+
+运行目录 `/opt/aimock/deploy`，专用运行时 `/opt/aimock/runtime`。
+下游 API key 自动生成到 `/etc/aimock/client-key`，不会使用上游密钥作为下游鉴权。
+服务通过 systemd 自启，文件描述符上限 131072，内存上限 48 GiB，停止时最多等待 30 秒。
+
+## Agent 接入
+
+推荐为每个 Agent 会话设置独立的 base URL，session ID 必须在每次任务运行时重新生成：
+
+| 用途         | base URL                                                 |
+| ------------ | -------------------------------------------------------- |
+| 内网录制     | `http://<工作机地址>:4010/record/<session-id>/v1`        |
+| 内网回放     | `http://<工作机地址>:4010/replay/<trace-id>/v1`          |
+| 经平台 nginx | `https://<已验证公网入口>/aimock/record/<session-id>/v1` |
+
+所有模型请求使用 `Authorization: Bearer <下游 API key>`；`model` 使用环境变量中的完整 ID。
+录制接口只接受当前配置的完整模型 ID，防止其他模型的请求混入同一存储目录。
+`/healthz` 不需鉴权，其他接口需要。没有暴露记录查询、原始数据下载或 AIMock 控制接口。
+这里的公网 URL 是模板；内网监听成功不能当作公网发布成功，必须验证平台端口映射和 TLS。
+
+也支持固定 `/v1/chat/completions` 加以下头：
+
+| Header             | 作用                                                  |
+| ------------------ | ----------------------------------------------------- |
+| `X-Test-Id`        | 录制会话 ID；回放时可用于区分独立运行                 |
+| `X-AIMock-Mode`    | `record`（默认）或 `replay`                           |
+| `X-AIMock-Trace`   | 使用固定路径回放时指定 trace                          |
+| `X-AIMock-Step`    | 显式指定步骤，从 0 开始                               |
+| `X-AIMock-Attempt` | 重试分支，默认 0                                      |
+| `X-AIMock-Strict`  | 回放默认验证完整请求指纹；设为 `0` 可显式允许内容漂移 |
+
+录制时可从现有请求自动提取会话标识，优先级为 URL 中的 session、`X-Test-Id`、原生会话字段。
+原生字段支持 `X-AIMock-Session`、`X-Session-Id`、`Session-Id`、`session_id`、`X-Session-Affinity`，
+以及请求体 `metadata.session_id`、`metadata.sessionId`、`session_id`。
+没有显式 URL / `X-Test-Id` 时，多个原生字段必须一致；冲突或缺失均返回 400。
+网关不会通过 IP、连接、用户 ID、相同 prompt 或单次 request ID 猜测会话。
+请求体中的身份字段原样转发，是否被上游接受由其兼容接口决定；优先使用请求头。
+
+pi 0.81.1 内部已有 session ID，但对自定义 provider 默认不发送。
+设置 `compat.sendSessionAffinityHeaders: true` 后，pi 自动发送稳定会话头，
+可直接使用固定 `http://<地址>:4010/v1`，无需先调用网关申请 ID 或逐会话构造 URL。
+不要将 pi 的 cache retention 设为 `none`，该模式会关闭会话关联头。
+此兼容开关是 pi 的额外配置，因此不能把默认 pi 宣称为只改 base URL / key 就能自动隔离。
+其他 agent 只有在原请求携带稳定会话 ID 时才能直接提取；没有此字段时需由启动器或适配器注入。
+
+回放仍需指定已有 trace（URL 或 `X-AIMock-Trace`）；会话 ID 不等于录制轨迹 ID。
+若需要完全固定的回放入口，还需在网关配置会话到 trace 的分配规则。
+
+未指定 step 时使用请求历史中的 assistant 消息数，适合本次验证的顺序 pi 会话。
+会压缩历史、并行分支、或重复使用 session ID 的调用方必须显式提供 step/attempt。
+不使用全局游标；重试不会隐式推进，多个 Agent 可以独立复用同一个 trace。
+
+回放指纹覆盖 model、完整 messages、tools 和生成参数；仅忽略 `stream`、`stream_options`。
+不同 cwd、时间、工具输出或参数会产生 409。允许漂移时用 `X-AIMock-Drift` 响应头标记。
+工具仍由 Agent 真实执行；任务工作目录、初始文件和 verifier 需要调用方保持一致。
+
+pi 自定义 provider 使用 `api: "openai-completions"`，关闭不支持的兼容选项：
+
+```json
+{
+  "providers": {
+    "aimock": {
+      "baseUrl": "http://<地址>:4010/record/<session-id>/v1",
+      "api": "openai-completions",
+      "apiKey": "$AIMOCK_API_KEY",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "supportsStore": false,
+        "sendSessionAffinityHeaders": true
+      },
+      "models": [
+        {
+          "id": "<YICLOUD_QWEN_MODEL>",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 40960,
+          "maxTokens": 4096
+        }
+      ]
+    }
+  }
+}
+```
+
+## 公网反向代理
+
+已有 YiCloud nginx 8000 server 时，`install-nginx-route.py` 会备份配置、校验语法并添加
+`/aimock/` 路由，保留 `/vscode/`。与 `nginx-location.conf` 放在同目录后执行：
+
+```bash
+sudo python3 deploy/yicloud/install-nginx-route.py
+curl http://127.0.0.1:8000/aimock/healthz
+```
+
+外层公网服务需将 HTTPS 请求转发到这个端口，保留 Authorization、会话头、路径和 SSE。
+本配置关闭 nginx 响应缓冲、请求缓冲和 gzip，流式超时 300 秒。公网发布后必须从外部验证
+健康检查、无 key 返回 401、携 key 的真实 Agent 录制和 SSE 增量到达。
+
+## 存储与时间筛选
+
+默认根目录固定到 `/mnt/shared-storage-gpfs2/df4-hicache/aimock-v1`：
+
+DeepSeek `m-20260919193841-2dxhf/deepseekv4.1-flash` 使用独立 profile：
+配置文件为共享部署目录下的 `config/upstream-deepseekv4.1-flash.json`，
+`AIMOCK_DATA_ROOT=/mnt/shared-storage-gpfs2/df4-hicache/aimock-deepseekv4.1-flash-v1`。
+通过启动参数选择该 profile，沿用原上游 key 和 `config/client-key`；原 Qwen 配置和录制保留。
+以下查询/导出命令操作 DeepSeek 时，需额外传 `--root` 指定该目录。
+
+```text
+records/<UTC 日期>/<SHA256(session-id)>/<时间戳-UUID>/
+    request.json       完整请求，包括工具定义和历史工具结果
+    response.raw       原始 JSON 或 SSE 字节
+    frames.json        HTTP 数据块到达时间和长度
+    fixture.json       成功回答对应的原生 AIMock fixture
+    metadata.json      会话、步骤、attempt、开始/结束时间、状态、工具名、指纹
+traces/<trace-id>/manifest.json
+receipts/              验证结果，独立于业务录制
+```
+
+每次请求独立写文件，metadata 原子替换。文件/目录默认 600/700；不保存 Authorization。
+未结束流、取消、损坏 SSE、非 200 或超限回答保留原始证据，标记为不可导出。
+正常完成的上游错误仍原样返回 status/body/Retry-After。存储写入错误会中断请求，不假装录制成功。
+单请求默认最多保存 64 MiB 响应、16 MiB 请求、20 万数据块；超限响应继续转发但录制不可回放。
+
+在工作机上查询或导出，时间范围为 **[from, to)**，支持带时区的 ISO 时间：
+
+```bash
+NODE=/opt/aimock/runtime/node_modules/node/bin/node
+"$NODE" /opt/aimock/deploy/ctl.mjs list --session run-001 \
+  --from 2026-10-20T11:00:00+08:00 --to 2026-10-20T12:00:00+08:00
+"$NODE" /opt/aimock/deploy/ctl.mjs export --session run-001 \
+  --from 2026-10-20T11:00:00+08:00 --to 2026-10-20T12:00:00+08:00
+```
+
+导出创建新的不可变 manifest，不修改录制。一个 manifest 只包含一个 session；
+同一步/attempt 的重复同指纹请求选择首个完整结果，不同指纹明确报错。
+导出要求调用方确认本次会话已结束；活跃会话的后续请求不会进入已有 manifest。
+
+按日期和会话目录缩小查询范围，回放用 manifest 直接定位文件。
+每 worker 默认只缓存 512 条热 fixture、256 份 manifest；在途选择期间的 pin 可以暂时超过热缓存数。
+原生 AIMock 仍扫描热 fixture，尚未验收海量独立 trace 的存储索引性能。
+
+## 回放时间与观测
+
+原始字节和 HTTP 块时序被保留。默认回放通过 AIMock 重新生成 SSE，使用零延迟；
+不会逐帧、逐 token 复现原始流，也不会复现原始 HTTP 块边界。
+可通过 systemd 环境变量设置 `AIMOCK_REPLAY_TTFT_MS` 和 `AIMOCK_REPLAY_CHUNKS_PER_SECOND`，
+重启服务生效。后者对应 AIMock `tps` 的 chunk 间隔，不能当成真实 token/s。
+`/metrics` 需下游 key，带 pid 标签，返回接收请求 worker 的指标，不是全机聚合值。
+
+## 验证
+
+```bash
+cd deploy/yicloud
+npm ci
+npm test
+```
+
+集成测试在独立临时目录和双 worker 网关运行，检查持续转发、并发会话隔离、原始 429/
+Retry-After、原始工具结果、tool-call ID/参数/usage、严格漂移拒绝、缺步拒绝、时间筛选、
+损坏流排除和歧义分支拒绝。运行环境使用 Node 22。
+
+`probe-upstream.py` 验证真实模型流式/非流式 tool calls；`pi-smoke.py` 启动三个简单独立
+pi 任务；`pi-replay-smoke.py` 审计隔离并使用真实 pi 严格回放。两者不会调用或更改 suites。
+测试任务只要求读取文件、修复加法和运行断言，不能代表完整 Tmax 或其他真实 benchmark 成功率。
+
+`replay-bench.mjs RECEIPT_DIR 10000` 使用三个真实 trace 的第 0 步做单机 burst，核对每个
+回答的 tool-call ID 和参数。2026-10-20 的 128/512/2048/10000 请求均通过，10000 请求
+约 4 秒。客户端与服务同机、默认零延迟、没有公网链路；不代表 10000 活跃长流、持续 SLO
+或大轨迹库容量。原始测试和失败记录留在共享存储 receipts，不提交到仓库。
