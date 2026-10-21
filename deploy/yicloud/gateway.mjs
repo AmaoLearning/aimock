@@ -14,6 +14,7 @@ import {
   beginRecord,
   numeric,
   safeId,
+  recordSession,
   requestHash,
   responseFixture,
   resolveRecord,
@@ -265,12 +266,15 @@ async function startWorker() {
     const mode = route?.[1] || req.headers["x-aimock-mode"] || "record";
     if (!["record", "replay"].includes(mode))
       throw Object.assign(new Error("Invalid mode"), { status: 400 });
-    const session = safeId(
-      route
-        ? decodeURIComponent(route[2])
-        : req.headers[mode === "record" ? "x-test-id" : "x-aimock-trace"],
-    );
     const body = await readBody(req);
+    const session =
+      mode === "record"
+        ? recordSession(req.headers, body, route ? decodeURIComponent(route[2]) : undefined)
+        : safeId(route ? decodeURIComponent(route[2]) : req.headers["x-aimock-trace"]);
+    if (mode === "record" && body.model !== config.YICLOUD_QWEN_MODEL)
+      throw Object.assign(new Error(`Recording requires model ${config.YICLOUD_QWEN_MODEL}`), {
+        status: 400,
+      });
     const step = numeric(
       req.headers["x-aimock-step"] ??
         body.messages.filter((message) => message.role === "assistant").length,

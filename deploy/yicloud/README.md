@@ -121,6 +121,7 @@ curl http://127.0.0.1:4010/healthz
 | 经平台 nginx | `https://<已验证公网入口>/aimock/record/<session-id>/v1` |
 
 所有模型请求使用 `Authorization: Bearer <下游 API key>`；`model` 使用环境变量中的完整 ID。
+录制接口只接受当前配置的完整模型 ID，防止其他模型的请求混入同一存储目录。
 `/healthz` 不需鉴权，其他接口需要。没有暴露记录查询、原始数据下载或 AIMock 控制接口。
 这里的公网 URL 是模板；内网监听成功不能当作公网发布成功，必须验证平台端口映射和 TLS。
 
@@ -134,6 +135,23 @@ curl http://127.0.0.1:4010/healthz
 | `X-AIMock-Step`    | 显式指定步骤，从 0 开始                               |
 | `X-AIMock-Attempt` | 重试分支，默认 0                                      |
 | `X-AIMock-Strict`  | 回放默认验证完整请求指纹；设为 `0` 可显式允许内容漂移 |
+
+录制时可从现有请求自动提取会话标识，优先级为 URL 中的 session、`X-Test-Id`、原生会话字段。
+原生字段支持 `X-AIMock-Session`、`X-Session-Id`、`Session-Id`、`session_id`、`X-Session-Affinity`，
+以及请求体 `metadata.session_id`、`metadata.sessionId`、`session_id`。
+没有显式 URL / `X-Test-Id` 时，多个原生字段必须一致；冲突或缺失均返回 400。
+网关不会通过 IP、连接、用户 ID、相同 prompt 或单次 request ID 猜测会话。
+请求体中的身份字段原样转发，是否被上游接受由其兼容接口决定；优先使用请求头。
+
+pi 0.81.1 内部已有 session ID，但对自定义 provider 默认不发送。
+设置 `compat.sendSessionAffinityHeaders: true` 后，pi 自动发送稳定会话头，
+可直接使用固定 `http://<地址>:4010/v1`，无需先调用网关申请 ID 或逐会话构造 URL。
+不要将 pi 的 cache retention 设为 `none`，该模式会关闭会话关联头。
+此兼容开关是 pi 的额外配置，因此不能把默认 pi 宣称为只改 base URL / key 就能自动隔离。
+其他 agent 只有在原请求携带稳定会话 ID 时才能直接提取；没有此字段时需由启动器或适配器注入。
+
+回放仍需指定已有 trace（URL 或 `X-AIMock-Trace`）；会话 ID 不等于录制轨迹 ID。
+若需要完全固定的回放入口，还需在网关配置会话到 trace 的分配规则。
 
 未指定 step 时使用请求历史中的 assistant 消息数，适合本次验证的顺序 pi 会话。
 会压缩历史、并行分支、或重复使用 session ID 的调用方必须显式提供 step/attempt。
@@ -155,7 +173,8 @@ pi 自定义 provider 使用 `api: "openai-completions"`，关闭不支持的兼
       "compat": {
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false,
-        "supportsStore": false
+        "supportsStore": false,
+        "sendSessionAffinityHeaders": true
       },
       "models": [
         {
@@ -188,6 +207,12 @@ curl http://127.0.0.1:8000/aimock/healthz
 ## 存储与时间筛选
 
 默认根目录固定到 `/mnt/shared-storage-gpfs2/df4-hicache/aimock-v1`：
+
+DeepSeek `m-20260919193841-2dxhf/deepseekv4.1-flash` 使用独立 profile：
+配置文件为共享部署目录下的 `config/upstream-deepseekv4.1-flash.json`，
+`AIMOCK_DATA_ROOT=/mnt/shared-storage-gpfs2/df4-hicache/aimock-deepseekv4.1-flash-v1`。
+通过启动参数选择该 profile，沿用原上游 key 和 `config/client-key`；原 Qwen 配置和录制保留。
+以下查询/导出命令操作 DeepSeek 时，需额外传 `--root` 指定该目录。
 
 ```text
 records/<UTC 日期>/<SHA256(session-id)>/<时间戳-UUID>/

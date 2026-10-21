@@ -35,6 +35,29 @@ export function safeId(value) {
     );
   return value;
 }
+// 优先保留显式路由；无路由时提取调用方已发送的稳定会话标识。
+// request ID、user、prompt hash 和连接均不能证明是同一会话，因此不作为兜底。
+export function recordSession(headers, body, explicit) {
+  if (explicit !== undefined) return safeId(explicit);
+  if (headers["x-test-id"] !== undefined) return safeId(headers["x-test-id"]);
+  const candidates = [
+    ...["x-aimock-session", "x-session-id", "session-id", "session_id", "x-session-affinity"].map(
+      (name) => headers[name],
+    ),
+    body.metadata?.session_id,
+    body.metadata?.sessionId,
+    body.session_id,
+  ].filter((value) => value !== undefined && value !== null);
+  if (!candidates.length)
+    throw Object.assign(
+      new Error("Missing session ID; send a stable session header or use /record/SESSION/v1"),
+      { status: 400 },
+    );
+  const ids = candidates.map(safeId);
+  if (new Set(ids).size !== 1)
+    throw Object.assign(new Error("Conflicting session IDs in request"), { status: 400 });
+  return ids[0];
+}
 export async function atomicJson(filename, data) {
   const temporary = `${filename}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(data, null, 2), { mode: 0o600, flag: "wx" });

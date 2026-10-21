@@ -185,6 +185,56 @@ test("concurrent record/replay with real AIMock", { timeout: 30000 }, async (t) 
   assert.equal((await request("/v1/chat/completions", body("x"))).status, 400);
   const denied = await fetch(base + "/v1/models");
   assert.equal(denied.status, 401);
+  // pi 可直接使用固定 /v1：稳定会话头在多 worker 之间保持隔离。
+  const automatic = await Promise.all(
+    sessions.map((_, index) => {
+      const session = `native-pi-${index}`;
+      return request("/v1/chat/completions", body(session), {
+        session_id: session,
+        "x-session-affinity": session,
+      });
+    }),
+  );
+  for (let index = 0; index < automatic.length; index++) {
+    const session = `native-pi-${index}`;
+    assert.equal(automatic[index].status, 200, automatic[index].text);
+    assert.equal(automatic[index].headers.get("x-aimock-session"), session);
+    assert.equal((await findRecords(root, { session })).length, 1);
+  }
+  const nativeSecond = body("native-pi-0", false);
+  nativeSecond.messages.push(
+    { role: "assistant", content: "continue" },
+    { role: "user", content: "next" },
+  );
+  assert.equal(
+    (await request("/v1/chat/completions", nativeSecond, { "x-session-id": "native-pi-0" }))
+      .status,
+    200,
+  );
+  assert.equal((await findRecords(root, { session: "native-pi-0" })).length, 2);
+  const metadataSession = { ...body("from-metadata"), metadata: { session_id: "from-metadata" } };
+  assert.equal((await request("/v1/chat/completions", metadataSession)).status, 200);
+  const beforeInvalid = calls;
+  assert.equal(
+    (await request("/v1/chat/completions", body("request-id-only"), { "x-request-id": "one-request" }))
+      .status,
+    400,
+  );
+  assert.equal(
+    (
+      await request("/v1/chat/completions", body("conflict"), {
+        "x-session-id": "session-a",
+        "x-session-affinity": "session-b",
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (await request("/record/wrong-model/v1/chat/completions", { ...body("wrong-model"), model: "other-model" }))
+      .status,
+    400,
+  );
+  assert.equal(calls, beforeInvalid, "invalid identity/model must not reach upstream");
   const limited = await request(
     "/record/rate-limit/v1/chat/completions",
     body("rate-limit", false),
