@@ -1299,6 +1299,12 @@
         color: var(--blue);
         font-size: 0.75rem;
       }
+      /* Muted release label, as in the comparison-table-note ("Requires 1.45.0+"). */
+      .version-note {
+        font-size: 0.75rem;
+        font-weight: 400;
+        color: var(--text-secondary);
+      }
       .matrix-legend {
         margin: 0.35rem 0 0;
         font-size: 0.72rem;
@@ -3686,7 +3692,7 @@
                 <td class="col-aimock">
                   <a href="/claude-messages#model-catalog"
                     ><span class="yes">Built-in &#10003;</span></a
-                  >
+                  ><br /><span class="version-note">1.46.0+</span>
                 </td>
                 <!-- reviewed 2026-10-20: VidaiMock serves the OpenAI list on its Gemini/Anthropic model routes; mock-llm ships an OpenAI /v1/models config rule; no model routes in piyook, mokksy or MockServer httpLlmResponse -->
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
@@ -3702,7 +3708,7 @@
                 <td class="col-aimock">
                   <a href="/claude-messages#token-counts"
                     ><span class="yes">Built-in &#10003;</span></a
-                  >
+                  ><br /><span class="version-note">1.46.0+</span>
                 </td>
                 <!-- reviewed 2026-10-20: VidaiMock gemini_count_tokens.yaml returns a fixed totalTokens; MockServer names count_tokens only as unaccounted proxied traffic -->
                 <td><span class="no" role="img" aria-label="No">&#10007;</span></td>
@@ -3718,15 +3724,15 @@
                 <td class="col-aimock">
                   <a href="/claude-messages#authentication-errors"
                     ><span class="yes">Opt-in &#10003;</span></a
-                  >
+                  ><br /><span class="version-note">1.46.0+</span>
                 </td>
-                <!-- reviewed 2026-10-20: VidaiMock maps 401 to authentication_error / UNAUTHENTICATED; piyook chaos 401 uses api_error / INTERNAL; others need a hand-written body -->
+                <!-- reviewed 2026-10-20: VidaiMock maps 401 to authentication_error / UNAUTHENTICATED; piyook and MockServer (LlmErrorBodies.kindForStatus) answer a 401 with api_error / INTERNAL; others need a hand-written body -->
                 <td><span class="manual">manual</span></td>
                 <td><span class="yes" role="img" aria-label="Yes">&#10003;</span></td>
                 <td><span class="manual">manual</span></td>
                 <td><span class="partial">partial</span></td>
                 <td><span class="manual">manual</span></td>
-                <td><span class="manual">manual</span></td>
+                <td><span class="partial">partial</span></td>
                 <td><span class="manual">manual</span></td>
               </tr>
               <tr>
