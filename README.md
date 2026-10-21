@@ -27,6 +27,10 @@ bills.
 
 ## Quick Start
 
+For a coding-agent recording proxy with session-isolated storage and strict replay,
+see the [user-side gateway deployment guide](deploy/agent-gateway/README.md).
+It includes a relocatable runtime bundle, configurable storage paths, and pi examples for AIMock 1.46.0.
+
 ```bash
 npm install @copilotkit/aimock
 ```

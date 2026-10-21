@@ -1,0 +1,27 @@
+{
+  "providers": {
+    "aimock": {
+      "baseUrl": "http://127.0.0.1:4010/v1",
+      "api": "openai-completions",
+      "apiKey": "$AIMOCK_API_KEY",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "supportsStore": false,
+        "sendSessionAffinityHeaders": true,
+        "maxTokensField": "max_tokens",
+        "requiresReasoningContentOnAssistantMessages": true
+      },
+      "models": [
+        {
+          "id": "m-20260919193841-2dxhf/deepseekv4.1-flash",
+          "name": "DeepSeek recording gateway",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 40960,
+          "maxTokens": 4096
+        }
+      ]
+    }
+  }
+}

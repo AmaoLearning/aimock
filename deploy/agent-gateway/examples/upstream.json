@@ -1,0 +1,5 @@
+{
+  "url": "https://maas.yicloud.com.cn/v1/chat/completions",
+  "model": "m-20260919193841-2dxhf/deepseekv4.1-flash",
+  "apiKey": "REPLACE_WITH_UPSTREAM_API_KEY"
+}

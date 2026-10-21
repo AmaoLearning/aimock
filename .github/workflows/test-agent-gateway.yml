@@ -1,0 +1,36 @@
+name: Agent gateway deployment
+
+on:
+  pull_request:
+    paths:
+      - deploy/agent-gateway/**
+      - .github/workflows/test-agent-gateway.yml
+  push:
+    branches: [deploy/user-side-v1.46.0]
+    paths:
+      - deploy/agent-gateway/**
+      - .github/workflows/test-agent-gateway.yml
+
+permissions:
+  contents: read
+
+jobs:
+  portable-gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: deploy/agent-gateway/package-lock.json
+      - run: npm ci --no-audit --no-fund
+        working-directory: deploy/agent-gateway
+      - run: node_modules/node/bin/node --test tests/*.test.mjs
+        working-directory: deploy/agent-gateway
+      - run: bash -n deploy/agent-gateway/bundle.sh deploy/agent-gateway/install.sh deploy/agent-gateway/launch.sh deploy/agent-gateway/install-user-service.sh
+      - run: python3 -c 'import ast; from pathlib import Path; ast.parse(Path("deploy/agent-gateway/pi-smoke.py").read_text())'
+      - run: npx --yes prettier@3.6.2 --check deploy/agent-gateway .github/workflows/test-agent-gateway.yml
