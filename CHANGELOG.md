@@ -2,35 +2,18 @@
 
 ## [Unreleased]
 
+## [1.46.0] - 2026-10-20
+
 ### Added
 
-- Recorded Ollama and OpenAI embedding fixtures include optional `match.embeddingRequest` criteria for the operation, input shape and requested dimensions. Handwritten embedding fixtures without this field keep their broad matching behavior.
-
-- An independent, opt-in required-header policy accepts programmatic options, `llm.policy`, repeatable `--policy` flags on both CLIs, and `X-AIMock-Policy` request headers. Defaults remain off, including strict-only requests. Enforced Anthropic version rejection returns 400 with a safe correlated `request_id`. The recorder strips the policy header before HTTP forwarding. ([#542](https://github.com/CopilotKit/aimock/pull/542))
-
-- Opt-in provider-native inbound-auth 401 bodies: set `policy.authErrors` to `"native"` (programmatic option, `llm.policy`, `--policy authErrors=native`, or an `X-AIMock-Policy: authErrors=native` request header). Anthropic Messages/count_tokens then return `{"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}` with a `request-id` header, and Gemini/Vertex Google HTTP paths return `{"error":{"code":401,"message":"Invalid API key","status":"UNAUTHENTICATED"}}`. The default, `"legacy"`, keeps the 1.45 body with `error.code: "invalid_api_key"` on every route, so existing clients and tests need no change. Shared `/v1/models`, other HTTP paths and WebSocket upgrade rejections always keep the legacy body.
-
-- Anthropic Messages and Bedrock Claude invoke responses preserve fixture cache usage, including the cache TTL breakdown. Record mode retains token counts and cache usage for replay.
-
-- Native Anthropic and Gemini model list/detail routes with provider paging and synthetic metadata. Anthropic and Gemini count routes estimate translated messages, system text, and converted tools. Counts ignore fixture usage and never proxy or record.
-
-- Opt-in Anthropic model list on the shared `GET /v1/models` path: set `policy.modelCatalog` to `"native"` (programmatic option, `llm.policy`, `--policy modelCatalog=native`, or an `X-AIMock-Policy: modelCatalog=native` request header). Requests with `anthropic-version`, or `x-api-key` without `Authorization`, then get the Anthropic-format paged list. The default, `"legacy"`, returns the 1.45 OpenAI-format list for every request, whatever its headers or query parameters, so Anthropic cursor and limit validation does not apply. Anthropic SDK users who call `models.list()` must opt in. The new `GET /v1/models/{id}` detail route and the Gemini `/v1beta/models` routes select their format by request and need no opt-in.
-
-- Responses API (HTTP, SSE, WebSocket): optional `phase` response override (`commentary` | `final_answer`) on assistant message output items; validated on load (#531)
+- Gemini model list/detail, Anthropic model detail, and token-count routes (#542, #551)
+- Opt-in policies: `requiredHeaders`, native `authErrors`, native `modelCatalog` (#542, #566, #568)
+- Opt-in fixture `nonStreamingTiming: true` delays non-streaming OpenAI chat replies (#545, #567)
+- Anthropic/Bedrock cache usage kept in replay and record; Responses `phase` override (#531, #542)
 
 ### Fixed
 
-- Anthropic Messages streaming stops when the client disconnects mid-stream. Previously aimock kept sleeping through per-chunk latency and writing events into the closed socket, and the journal recorded the request as complete. The journal entry now has `interrupted: true` and `interruptReason: "client aborted"`, matching other aimock disconnect journal entries. Fixture interruptions (`truncateAfterChunks`, `disconnectAfterMs`) keep their own reasons. ([#557](https://github.com/CopilotKit/aimock/pull/557))
-
-- Bedrock SDK examples configure `NodeHttpHandler` for aimock's HTTP/1 server; the current SDK's default HTTP/2 transport remains unsupported.
-
-- Ollama `/api/embed` returns an `embeddings` matrix with one vector per input, honors fallback dimensions, and retains batch vectors and metadata through recording/replay. Recorded matches preserve input shape, dimensions, model and operation, so different requests do not reuse the wrong batch or match legacy/OpenAI embedding routes. `/api/embeddings` keeps its legacy single-vector response.
-- AG-UI convenience helpers use each request's thread/run IDs and create fresh message/tool-call IDs. Explicit event fixtures retain their authored IDs.
-
-- Anthropic model lists reject unknown `after_id` and `before_id` cursors with 400 `invalid_request_error`, including when a lifecycle filter would return an empty page. Valid cursors and OpenAI-style lists keep their existing paging behavior.
-- MCP `resources/read`: a resource whose content has neither `text` nor `blob` (including one added without content) now reads as `"text": ""` (#533)
-- MCP `resources/read`: the read uses the resource definition's `mimeType` when its content has none (#533)
-- OpenAI chat completions only, non-streaming (`stream: false`): opt-in timing with the new fixture field `nonStreamingTiming: true`. A fixture that sets it, together with a `streamingProfile` (`ttft`/`tps`/`jitter`) or `recordedTimings`, delays the JSON response by about the total its streamed content chunks would take. This includes text, tool call, combined content and tool call, and `blocks` replies. Without `nonStreamingTiming: true`, the default is unchanged: `stream: false` replies return immediately, also for fixtures with a `streamingProfile` and for recorded fixtures with `recordedTimings`. Bare `latency` and the global `--latency` stay inter-SSE-chunk gaps and never delay non-streaming responses. Other providers are unchanged (#545, #561)
+- Ollama embed batches, AG-UI thread/run IDs, empty MCP reads, Anthropic aborts (#533, #553, #557)
 
 ## [1.45.1] - 2026-10-11
 
